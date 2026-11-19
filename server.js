@@ -67,8 +67,8 @@ function readCookie(req, name) {
   const m = h.split(/;\s*/).find(c => c.startsWith(name + '='));
   return m ? decodeURIComponent(m.slice(name.length + 1)) : '';
 }
-/** 쿠키 → 누구인지 (비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요) */
-function whoAmI(req) {
+/** 쿠키 → 로그인한 진짜 사람 (비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요) */
+function realMe(req) {
   const t = readCookie(req, 'mf');
   if (!t || t.indexOf('.') < 0) return null;
   const [k64, sig] = t.split('.');
@@ -82,9 +82,23 @@ function whoAmI(req) {
   const s = store.getRoster().find(x => game.keyOf(x.no) === key);
   return { key, email: key, name: s.name, no: s.no, teacher: false };
 }
-function setCookie(req, res, val, maxAge) {
+function setCookie(req, res, val, maxAge, name) {
   const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-  res.setHeader('Set-Cookie', 'mf=' + encodeURIComponent(val) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + (secure ? '; Secure' : ''));
+  const c = (name || 'mf') + '=' + encodeURIComponent(val) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + (secure ? '; Secure' : '');
+  const prev = res.getHeader('Set-Cookie');
+  res.setHeader('Set-Cookie', prev ? [].concat(prev, c) : c);
+}
+/** 선생님이 /admin 에서 '이 학생으로 보기'를 눌렀을 때만 학생으로 접속 (쿠키 mf_as, 2시간) */
+const AS_TTL = 60 * 60 * 2;
+/** 누구로 보일지: 진짜 선생님 + mf_as 쿠키가 있을 때만 그 학생. 학생이 mf_as 를 만들어 넣어도 무시돼요 */
+function whoAmI(req) {
+  const me = realMe(req);
+  if (!me || !me.teacher) return me;
+  const k = readCookie(req, 'mf_as');
+  if (!k) return me;
+  const s = store.getRoster().find(x => game.keyOf(x.no) === k);
+  if (!s) return me;
+  return { key: k, email: k, name: s.name, no: s.no, teacher: false, viaTeacher: true };
 }
 
 /* ---------- 화면 만들기: Apps Script 의 index + include 를 한 장으로 ---------- */
@@ -214,7 +228,14 @@ async function main() {
     let boot;
     try { boot = game.buildBoot_(me); } catch (e) { boot = { error: String(e && e.message || e) }; }
     res.set('Cache-Control', 'no-store');
-    res.type('html').send(PAGE.html.replace('__BOOT_JSON__', () => bootJson(boot)));
+    let html = PAGE.html.replace('__BOOT_JSON__', () => bootJson(boot));
+    if (me.viaTeacher) {
+      const bar = '<div style="position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#c0392b;color:#fff;padding:8px 12px;font:600 14px Pretendard,system-ui,sans-serif;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap">' +
+        '👀 선생님 모드 · ' + String(me.name).replace(/[&<>"']/g, '') + ' 학생의 농장으로 접속 중이에요 (문제를 풀면 이 학생의 기록이 돼요)' +
+        '<a href="/admin/exit-as" style="background:#fff;color:#c0392b;padding:5px 12px;border-radius:7px;text-decoration:none">선생님으로 돌아가기</a></div>';
+      html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, () => bar + '</body>') : html + bar;
+    }
+    res.type('html').send(html);
   });
 
   app.get('/login', (req, res) => { res.set('Cache-Control', 'no-store'); res.sendFile(path.join(PUB, 'login.html')); });
@@ -235,7 +256,7 @@ async function main() {
     res.json({ ok: true });
   });
 
-  app.get('/logout', (req, res) => { setCookie(req, res, '', 0); res.redirect('/login'); });
+  app.get('/logout', (req, res) => { setCookie(req, res, '', 0); setCookie(req, res, '', 0, 'mf_as'); res.redirect('/login'); });
 
   /* google.script.run 대신 부르는 곳: POST /api/api_xxx  { args: [...], rid } */
   app.post('/api/:fn', (req, res) => {
@@ -262,12 +283,12 @@ async function main() {
 
   /* ---------- 선생님 관리 화면 (/admin) ---------- */
   function teacherGate(req, res, next) {
-    const me = whoAmI(req);
+    const me = realMe(req);
     if (!me || !me.teacher) return res.status(401).json({ ok: false, e: '선생님으로 로그인해 주세요.' });
     next();
   }
   app.get('/admin', (req, res) => {
-    const me = whoAmI(req);
+    const me = realMe(req);
     if (!me || !me.teacher) return res.redirect('/login?admin=1');
     res.set('Cache-Control', 'no-store');
     res.sendFile(path.join(PUB, 'admin.html'));
@@ -297,6 +318,19 @@ async function main() {
     out.sort((a, b) => a.no - b.no);
     store.setRoster(out);
     res.json({ ok: true, roster: out });
+  });
+  /* 선생님이 필요할 때만 정해진 학생의 농장으로 들어가기 (2시간 뒤 자동 해제) */
+  app.post('/admin/as', teacherGate, (req, res) => {
+    const no = String((req.body && req.body.no) || '').trim();
+    const s = store.getRoster().find(x => String(x.no) === no);
+    if (!s) return res.json({ ok: false, e: '명단에 없는 번호예요.' });
+    setCookie(req, res, game.keyOf(s.no), AS_TTL, 'mf_as');
+    console.log('[선생님 접속]', s.no + '번', s.name, '의 농장으로 접속');
+    res.json({ ok: true });
+  });
+  app.get('/admin/exit-as', (req, res) => {
+    setCookie(req, res, '', 0, 'mf_as');
+    res.redirect(realMe(req) ? '/admin' : '/login');
   });
   app.post('/admin/import', teacherGate, (req, res) => {
     try { res.json({ ok: true, report: doImport(req.body || {}) }); }

@@ -54,7 +54,7 @@
   <section>
     <h2>1. 학생 명단</h2>
     <p class="muted">한 줄에 한 명씩 <b>번호,이름,비밀번호</b> 로 적어요. 구글 시트에서 세 칸(번호·이름·비밀번호)을 복사해 붙여 넣어도 돼요.<br>
-      학생은 <b>번호 + 비밀번호</b>로 들어와요. 학생의 농장은 <b>번호</b>로 구분하니, 학기 중에 번호를 바꾸면 새 농장이 돼요. 비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요.</p>
+      표의 <b>"이 학생으로 보기"</b> 버튼으로 필요할 때 그 학생의 농장에 접속할 수 있어요.<br>학생은 <b>번호 + 비밀번호</b>로 들어와요. 학생의 농장은 <b>번호</b>로 구분하니, 학기 중에 번호를 바꾸면 새 농장이 돼요. 비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요.</p>
     <textarea id="rosterIn" rows="12" placeholder="1,김하늘,4821&#10;2,이바다,1937&#10;3,박구름,"></textarea>
     <div class="row">
       <button id="fillPw">비어 있는 비밀번호를 4자리 숫자로 채우기</button>
@@ -109,9 +109,9 @@
   function renderTable() {
     var joined = {}; (DATA.joined || []).forEach(function (k) { joined[k] = 1; });
     var rows = DATA.roster.map(function (s) {
-      return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '</td><td>' + esc(s.pw) + '</td><td>' + (joined['n' + s.no] ? '<span class="ok">농장 있음</span>' : '<span class="muted">아직 없음</span>') + '</td></tr>';
+      return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '</td><td>' + esc(s.pw) + '</td><td>' + (joined['n' + s.no] ? '<span class="ok">농장 있음</span>' : '<span class="muted">아직 없음</span>') + '</td><td><button data-as="' + esc(s.no) + '">이 학생으로 보기</button></td></tr>';
     }).join('');
-    $('rosterTbl').innerHTML = '<thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>농장</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="muted">아직 명단이 없어요</td></tr>') + '</tbody>';
+    $('rosterTbl').innerHTML = '<thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>농장</th><th>접속</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="muted">아직 명단이 없어요</td></tr>') + '</tbody>';
   }
   function renderStatus() {
     var h = '';
@@ -128,6 +128,16 @@
       renderTable(); renderStatus();
     });
   }
+  $('rosterTbl').onclick = function (e) {
+    var no = e.target && e.target.getAttribute && e.target.getAttribute('data-as');
+    if (!no) return;
+    var st = DATA.roster.filter(function (s) { return String(s.no) === no; })[0];
+    if (!confirm(no + '번 ' + (st ? st.name : '') + ' 학생의 농장으로 접속할까요?\n(문제를 풀면 그 학생의 기록이 돼요. 2시간 뒤 자동으로 선생님으로 돌아와요.)')) return;
+    api('/admin/as', { no: no }).then(function (j) {
+      if (!j.ok) { $('rosterMsg').innerHTML = '<span class="bad">' + esc(j.e) + '</span>'; return; }
+      location.href = '/';
+    });
+  };
   $('fillPw').onclick = function () {
     var used = {}, list = parseRoster($('rosterIn').value);
     list.forEach(function (s) { if (s.pw) used[s.pw] = 1; });
