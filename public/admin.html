@@ -54,7 +54,7 @@
   <section>
     <h2>1. 학생 명단</h2>
     <p class="muted">한 줄에 한 명씩 <b>번호,이름,비밀번호</b> 로 적어요. 구글 시트에서 세 칸(번호·이름·비밀번호)을 복사해 붙여 넣어도 돼요.<br>
-      표의 <b>"이 학생으로 보기"</b> 버튼으로 필요할 때 그 학생의 농장에 접속할 수 있어요.<br>학생은 <b>번호 + 비밀번호</b>로 들어와요. 학생의 농장은 <b>번호</b>로 구분하니, 학기 중에 번호를 바꾸면 새 농장이 돼요. 비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요.</p>
+      학생은 <b>번호 + 비밀번호</b>로 들어와요. 학생의 농장은 <b>번호</b>로 구분하니, 학기 중에 번호를 바꾸면 새 농장이 돼요. 비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요.</p>
     <textarea id="rosterIn" rows="12" placeholder="1,김하늘,4821&#10;2,이바다,1937&#10;3,박구름,"></textarea>
     <div class="row">
       <button id="fillPw">비어 있는 비밀번호를 4자리 숫자로 채우기</button>
@@ -84,7 +84,19 @@
   </section>
 
   <section>
-    <h2>3. 백업</h2>
+    <h2>3. 교사 계정 학생 농장으로 연결하기</h2>
+    <p class="muted">학생의 농장을 직접 확인하거나 고쳐 줘야 할 때만 쓰세요. 우리 반 학생 중 한 명을 고르고 <b>연결하기</b>를 누르면, 선생님 계정 그대로 그 학생의 농장 화면으로 들어가요.<br>
+      농장 화면 아래의 빨간 띠에서 <b>선생님으로 돌아가기</b>를 누르면 다시 이 화면으로 와요. (2시간 뒤에는 자동으로 풀려요)<br>
+      ⚠️ 연결된 동안 문제를 풀면 그 학생이 푼 것으로 기록돼요.</p>
+    <div class="row">
+      <select id="asSel" style="font:inherit;font-size:16px;padding:8px 10px;border:2px solid #c9a46a;border-radius:8px;background:#fff;min-width:200px"></select>
+      <button class="g" id="asGo">연결하기</button>
+    </div>
+    <div class="msg" id="asMsg"></div>
+  </section>
+
+  <section>
+    <h2>4. 백업</h2>
     <p class="muted">모든 농장·명단·풀이 기록을 파일 하나로 내려받아요. 학기 중간중간 받아 두면 안심이에요.</p>
     <a class="btn" href="/admin/backup">백업 파일 내려받기</a>
   </section>
@@ -109,9 +121,9 @@
   function renderTable() {
     var joined = {}; (DATA.joined || []).forEach(function (k) { joined[k] = 1; });
     var rows = DATA.roster.map(function (s) {
-      return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '</td><td>' + esc(s.pw) + '</td><td>' + (joined['n' + s.no] ? '<span class="ok">농장 있음</span>' : '<span class="muted">아직 없음</span>') + '</td><td><button data-as="' + esc(s.no) + '">이 학생으로 보기</button></td></tr>';
+      return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '</td><td>' + esc(s.pw) + '</td><td>' + (joined['n' + s.no] ? '<span class="ok">농장 있음</span>' : '<span class="muted">아직 없음</span>') + '</td></tr>';
     }).join('');
-    $('rosterTbl').innerHTML = '<thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>농장</th><th>접속</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="muted">아직 명단이 없어요</td></tr>') + '</tbody>';
+    $('rosterTbl').innerHTML = '<thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>농장</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="muted">아직 명단이 없어요</td></tr>') + '</tbody>';
   }
   function renderStatus() {
     var h = '';
@@ -125,18 +137,26 @@
     api('/admin/roster').then(function (j) {
       DATA = j;
       $('rosterIn').value = rosterText(j.roster);
-      renderTable(); renderStatus();
+      renderTable(); renderStatus(); renderAsSel();
     });
   }
-  $('rosterTbl').onclick = function (e) {
-    var no = e.target && e.target.getAttribute && e.target.getAttribute('data-as');
-    if (!no) return;
+  function renderAsSel() {
+    var sel = $('asSel'), keep = sel.value;
+    sel.innerHTML = (DATA.roster.length ? '<option value="">학생을 골라 주세요</option>' : '<option value="">(명단이 비어 있어요)</option>') +
+      DATA.roster.map(function (s) { return '<option value="' + esc(s.no) + '">' + esc(s.no) + '번 ' + esc(s.name) + '</option>'; }).join('');
+    if (keep) sel.value = keep;
+  }
+  $('asGo').onclick = function () {
+    var no = $('asSel').value;
+    if (!no) { $('asMsg').innerHTML = '<span class="bad">연결할 학생을 먼저 골라 주세요.</span>'; return; }
     var st = DATA.roster.filter(function (s) { return String(s.no) === no; })[0];
-    if (!confirm(no + '번 ' + (st ? st.name : '') + ' 학생의 농장으로 접속할까요?\n(문제를 풀면 그 학생의 기록이 돼요. 2시간 뒤 자동으로 선생님으로 돌아와요.)')) return;
+    if (!confirm(no + '번 ' + (st ? st.name : '') + ' 학생의 농장으로 연결할까요?\n(문제를 풀면 그 학생의 기록이 돼요. 2시간 뒤 자동으로 선생님으로 돌아와요.)')) return;
+    $('asGo').disabled = true;
     api('/admin/as', { no: no }).then(function (j) {
-      if (!j.ok) { $('rosterMsg').innerHTML = '<span class="bad">' + esc(j.e) + '</span>'; return; }
+      $('asGo').disabled = false;
+      if (!j.ok) { $('asMsg').innerHTML = '<span class="bad">' + esc(j.e) + '</span>'; return; }
       location.href = '/';
-    });
+    }).catch(function () { $('asGo').disabled = false; });
   };
   $('fillPw').onclick = function () {
     var used = {}, list = parseRoster($('rosterIn').value);
