@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>수학 농장 · 관리</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Pretendard, system-ui, sans-serif; color: #3b2a1a; background: #f3e6c8; }
+  header { background: #8b5a2b; color: #fff; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 20px; }
+  header a { color: #fff; text-decoration: none; background: rgba(255,255,255,.18); padding: 6px 12px; border-radius: 7px; font-weight: 600; margin-left: 6px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+  section { background: #fbf1dc; border: 3px solid #c9a46a; border-radius: 10px; padding: 16px; }
+  h2 { margin: 0 0 8px; font-size: 18px; }
+  p, li { line-height: 1.65; font-size: 14px; }
+  .muted { color: #7a5a3a; font-size: 13px; }
+  textarea { width: 100%; font: 14px/1.5 ui-monospace, Consolas, monospace; padding: 8px; border: 2px solid #c9a46a; border-radius: 7px; background: #fff; }
+  button, .btn { font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 2px solid #8b5a2b; background: #fff8e8; color: #5a3a22; cursor: pointer; text-decoration: none; display: inline-block; }
+  button.g { background: #5fa83a; border-color: #3f7a24; color: #fff; }
+  button.r { background: #c0392b; border-color: #8e2a1e; color: #fff; }
+  button[disabled] { opacity: .5; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: #fff; }
+  th, td { border: 1px solid #e0cfa8; padding: 5px 8px; text-align: center; }
+  th { background: #f6e7c4; }
+  .ok { color: #2e7d32; font-weight: 600; }
+  .bad { color: #c0392b; font-weight: 600; }
+  .warn { background: #ffe9c2; border: 2px solid #e0a040; border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .msg { min-height: 20px; font-size: 14px; margin-top: 6px; }
+  details summary { cursor: pointer; font-weight: 600; color: #8b5a2b; }
+  ol { padding-left: 20px; }
+  #cards { display: none; }
+  @media print {
+    body { background: #fff; }
+    header, main { display: none !important; }
+    #cards { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 8px; }
+    .pc { border: 2px dashed #999; border-radius: 8px; padding: 12px; font-size: 16px; break-inside: avoid; }
+    .pc b { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐔 수학 농장 · 선생님 관리</h1>
+  <div><a href="/">농장으로</a><a href="/logout">로그아웃</a></div>
+</header>
+<main>
+  <div id="status"></div>
+
+  <section>
+    <h2>1. 학생 명단</h2>
+    <p class="muted">한 줄에 한 명씩 <b>번호,이름,비밀번호</b> 로 적어요. 구글 시트에서 세 칸(번호·이름·비밀번호)을 복사해 붙여 넣어도 돼요.<br>
+      학생은 <b>번호 + 비밀번호</b>로 들어와요. 학생의 농장은 <b>번호</b>로 구분하니, 학기 중에 번호를 바꾸면 새 농장이 돼요. 비밀번호를 바꾸면 그 학생은 다시 로그인해야 해요.</p>
+    <textarea id="rosterIn" rows="12" placeholder="1,김하늘,4821&#10;2,이바다,1937&#10;3,박구름,"></textarea>
+    <div class="row">
+      <button id="fillPw">비어 있는 비밀번호를 4자리 숫자로 채우기</button>
+      <button class="g" id="saveRoster">명단 저장</button>
+      <button id="printCards">비밀번호 카드 인쇄</button>
+    </div>
+    <div class="msg" id="rosterMsg"></div>
+    <div style="margin-top:10px;overflow:auto"><table id="rosterTbl"></table></div>
+  </section>
+
+  <section>
+    <h2>2. Apps Script(구글 시트)에서 쓰던 데이터 가져오기</h2>
+    <p class="muted">지금까지 학생들이 키운 농장을 그대로 옮겨요. <b>명단을 먼저 저장한 다음</b> 하세요. 이름으로 학생을 찾아서 연결해요(학생명단 탭의 이름과 똑같아야 해요).</p>
+    <ol class="muted">
+      <li>구글 시트의 탭을 열고, 왼쪽 위 모서리 칸(A열 머리 왼쪽 빈칸)을 눌러 <b>시트 전체를 선택</b> → <b>Ctrl + C</b></li>
+      <li>아래 알맞은 칸에 <b>Ctrl + V</b> (첫 줄 제목은 같이 붙여도 돼요)</li>
+      <li>세 탭 모두 붙인 뒤 <b>가져오기</b></li>
+    </ol>
+    <div class="two">
+      <div><b>농장데이터</b> 탭<textarea id="impFarms" rows="6"></textarea></div>
+      <div><b>설정</b> 탭 (열린차시, 농장하루 …)<textarea id="impSettings" rows="6"></textarea></div>
+    </div>
+    <div style="margin-top:10px"><b>풀이기록</b> 탭 (정답률 통계)<textarea id="impLogs" rows="5"></textarea></div>
+    <label class="row" style="margin-top:6px"><input type="checkbox" id="impReplace" checked> 이미 서버에 있는 풀이 기록은 지우고 새로 가져오기 (두 번 가져와도 겹치지 않게)</label>
+    <div class="row"><button class="g" id="doImport">가져오기</button></div>
+    <div class="msg" id="impMsg"></div>
+  </section>
+
+  <section>
+    <h2>3. 백업</h2>
+    <p class="muted">모든 농장·명단·풀이 기록을 파일 하나로 내려받아요. 학기 중간중간 받아 두면 안심이에요.</p>
+    <a class="btn" href="/admin/backup">백업 파일 내려받기</a>
+  </section>
+</main>
+<div id="cards"></div>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var DATA = null;
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function api(url, body) {
+    return fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), credentials: 'same-origin' } : { credentials: 'same-origin' })
+      .then(function (r) { if (r.status === 401) { location.href = '/login?admin=1'; throw new Error('로그인 필요'); } return r.json(); });
+  }
+  function parseRoster(text) {
+    return text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean).map(function (l) {
+      var c = l.split(/\t|,/).map(function (x) { return x.trim(); });
+      return { no: c[0], name: c[1] || '', pw: c[2] || '' };
+    }).filter(function (s) { return !/^번호$/.test(s.no); });
+  }
+  function rosterText(list) { return list.map(function (s) { return s.no + ',' + s.name + ',' + s.pw; }).join('\n'); }
+  function renderTable() {
+    var joined = {}; (DATA.joined || []).forEach(function (k) { joined[k] = 1; });
+    var rows = DATA.roster.map(function (s) {
+      return '<tr><td>' + esc(s.no) + '</td><td>' + esc(s.name) + '</td><td>' + esc(s.pw) + '</td><td>' + (joined['n' + s.no] ? '<span class="ok">농장 있음</span>' : '<span class="muted">아직 없음</span>') + '</td></tr>';
+    }).join('');
+    $('rosterTbl').innerHTML = '<thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>농장</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="muted">아직 명단이 없어요</td></tr>') + '</tbody>';
+  }
+  function renderStatus() {
+    var h = '';
+    if (DATA.mode !== 'firestore') h += '<div class="warn">⚠️ 지금은 데이터를 <b>서버 파일</b>에 저장하고 있어요. Render 무료 서버는 다시 켜질 때 파일이 지워지니, <b>FIREBASE_KEY</b> 환경 변수를 꼭 넣어 주세요. (설치 안내 3단계)</div>';
+    if (DATA.missing && DATA.missing.length) h += '<div class="warn" style="margin-top:8px">⚠️ public 폴더에 없는 화면 파일: <b>' + esc(DATA.missing.join(', ')) + '</b> — Apps Script 의 HTML 파일을 넣어 주세요.</div>';
+    if (!DATA.lessons.length) h += '<div class="warn" style="margin-top:8px">⚠️ 문제 파일이 없어요. questions 폴더에 문제 파일을 넣어 주세요.</div>';
+    else h += '<div class="muted">문제 차시 ' + DATA.lessons.length + '개를 읽었어요: ' + esc(DATA.lessons.map(function (l) { return l.id; }).join(', ')) + '</div>';
+    $('status').innerHTML = h;
+  }
+  function load() {
+    api('/admin/roster').then(function (j) {
+      DATA = j;
+      $('rosterIn').value = rosterText(j.roster);
+      renderTable(); renderStatus();
+    });
+  }
+  $('fillPw').onclick = function () {
+    var used = {}, list = parseRoster($('rosterIn').value);
+    list.forEach(function (s) { if (s.pw) used[s.pw] = 1; });
+    list.forEach(function (s) {
+      if (s.pw) return;
+      var p; do { p = String(1000 + Math.floor(Math.random() * 9000)); } while (used[p]);
+      used[p] = 1; s.pw = p;
+    });
+    $('rosterIn').value = rosterText(list);
+    $('rosterMsg').textContent = '비밀번호를 채웠어요. "명단 저장"을 눌러야 적용돼요.';
+  };
+  $('saveRoster').onclick = function () {
+    $('saveRoster').disabled = true;
+    api('/admin/roster', { roster: parseRoster($('rosterIn').value) }).then(function (j) {
+      $('saveRoster').disabled = false;
+      if (!j.ok) { $('rosterMsg').innerHTML = '<span class="bad">' + esc(j.e) + '</span>'; return; }
+      $('rosterMsg').innerHTML = '<span class="ok">' + j.roster.length + '명을 저장했어요.</span>';
+      load();
+    }).catch(function () { $('saveRoster').disabled = false; });
+  };
+  $('printCards').onclick = function () {
+    $('cards').innerHTML = (DATA.roster || []).map(function (s) {
+      return '<div class="pc">🐔 수학 농장<br>' + esc(s.no) + '번 <b>' + esc(s.name) + '</b><br>비밀번호 <b>' + esc(s.pw) + '</b><br><small>' + esc(location.host) + '</small></div>';
+    }).join('');
+    window.print();
+  };
+  $('doImport').onclick = function () {
+    if (!confirm('가져온 학생의 농장은 Apps Script 에 있던 내용으로 바뀌어요. 계속할까요?')) return;
+    $('doImport').disabled = true; $('impMsg').textContent = '가져오는 중…';
+    api('/admin/import', { farms: $('impFarms').value, settings: $('impSettings').value, logs: $('impLogs').value, replaceLogs: $('impReplace').checked }).then(function (j) {
+      $('doImport').disabled = false;
+      if (!j.ok) { $('impMsg').innerHTML = '<span class="bad">' + esc(j.e) + '</span>'; return; }
+      var r = j.report;
+      $('impMsg').innerHTML = '<span class="ok">농장 ' + r.farms + '개, 설정 ' + r.settings + '개, 풀이 기록 ' + r.logs + '줄을 가져왔어요.</span>' +
+        (r.skipped.length ? '<br><span class="bad">못 가져온 것: ' + esc(r.skipped.join(', ')) + '</span>' : '');
+      load();
+    }).catch(function () { $('doImport').disabled = false; });
+  };
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,580 @@
+<script>
+/* 수학 농장 · 추가 기능
+ *  1) 사고력 3문제 모두 한 번에 맞히면 농장 최대 마릿수 +1 (화면 표시)
+ *  2) 레벨업 보상 골드 안내
+ *  3) 교사 화면 '농장 초기화' 탭
+ *  4) 텃밭 (실과 · 친환경 농업): 작물 심기, 수확, 텃밭 사건, 땅 살리기, 작물 창고·먹이 주기, 작물 도감, 친환경 온실
+ * 이 파일은 farm / quiz / teacher 다음에 불러와서, 필요한 함수만 덧씌워요.
+ */
+
+/* ---------- 최대 마릿수 = 건물 기본 + 사고력 보너스 ---------- */
+var _applyFarmBase = applyFarm;
+applyFarm = function (f) {
+  if (f && CF) {
+    var bonus = f.capBonus | 0;
+    CF.BARN.forEach(function (b, i) { if (BARN[i]) BARN[i].cap = b.cap + bonus; });
+  }
+  return _applyFarmBase(f);
+};
+
+/* ---------- 처음 안내 ---------- */
+INTRO[4][2] += ' 사고력 문제 3개를 모두 한 번에 맞히면 농장 최대 마릿수가 1마리 늘어나요. 농장 레벨이 오를 때마다 {lg}골드도 받아요!';
+var _introRenderBase = introRender;
+introRender = function () {
+  _introRenderBase();
+  var p = $('ipp'); if (p) p.textContent = p.textContent.replace(/\{lg\}/g, fmt(CF.LEVEL_GOLD));
+};
+
+/* ---------- 문제 풀기 화면 ---------- */
+var _progHtmlBase = progHtml;
+progHtml = function (v) {
+  var h = _progHtmlBase(v);
+  if (v.choice === 'adv') h = h.replace('8~10번 사고력: 맞힐 때마다 동물', '8~10번 사고력: 맞힐 때마다 동물 · 3문제 모두 한 번에 맞히면 최대 마릿수 +' + CF.ADV_CAP_BONUS);
+  return h;
+};
+
+var _renderChooseBase = renderChoose;
+renderChoose = function () {
+  _renderChooseBase();
+  var o = $('cAdv'); if (!o) return;
+  var p = o.querySelector('p');
+  if (p) p.insertAdjacentHTML('beforeend', '<br><b>3문제를 모두 한 번에 맞히면</b> 농장 최대 마릿수가 <b>+' + CF.ADV_CAP_BONUS + '</b> 늘어나요!');
+};
+
+var _showResultBase = showResult;
+showResult = function (res) {
+  _showResultBase(res);
+  var card = $('qbox').querySelector('.qcard.done'); if (!card) return;
+  var add = '';
+  if (res.capUp) add += '<div class="lvup"><i class="ti ti-paw" aria-hidden="true"></i> 사고력 3문제 한 번에 성공! 농장 최대 마릿수 +' + res.capUp + ' (지금 ' + res.cap + '마리까지)</div>';
+  if (res.levelGold) add += '<div class="lvup"><i class="ti ti-coin" aria-hidden="true"></i> 레벨업 보상 ' + fmt(res.levelGold) + '골드를 받았어요!</div>';
+  if (add && card.lastElementChild) card.lastElementChild.insertAdjacentHTML('beforebegin', add);
+};
+
+/* ---------- 교사 화면: 농장 초기화 탭 ---------- */
+var tResetSel = {}, tResetLog = true;
+
+renderTeacher = function () {
+  var d = TD, open = d.lessons.filter(function (l) { return l.id === d.open; })[0];
+  if (!tLesson) tLesson = d.open || (d.lessons[0] && d.lessons[0].id) || '';
+  var tabs = [['lesson', 'ti-calendar', '수업 설정'], ['students', 'ti-users', '학생 현황'], ['acc', 'ti-table', '차시별 정답률'], ['concept', 'ti-chart-bar', '개념별 정답률'], ['reset', 'ti-trash', '농장 초기화'], ['tools', 'ti-tool', '체험 도구']];
+  var html = '<div class="thead"><h2><i class="ti ti-school" aria-hidden="true"></i> 선생님 화면</h2>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="muted">오늘 열린 차시: <b>' + (open ? esc(open.title) : '없음') + '</b></span>' +
+    '<button class="pbtn w" onclick="openTeacher()"><i class="ti ti-refresh" aria-hidden="true"></i> 새로고침</button>' +
+    '<button class="pbtn g" onclick="closeTeacher()"><i class="ti ti-plant" aria-hidden="true"></i> 학생 화면 체험 (내 농장)</button></div></div>' +
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="pbtn w' + (tTab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '"><i class="ti ' + t[1] + '" aria-hidden="true"></i> ' + t[2] + '</button>'; }).join('') + '</div><div id="tbody"></div>';
+  $('tbox').innerHTML = html;
+  [].forEach.call($('tbox').querySelectorAll('[data-tab]'), function (b) { b.onclick = function () { tTab = b.getAttribute('data-tab'); renderTeacher(); }; });
+  ({ lesson: tLessonTab, students: tStudentsTab, acc: tAccTab, concept: tConceptTab, reset: tResetTab, tools: tToolsTab })[tTab]();
+};
+
+function tResetTab() {
+  var rows = TD.students.map(function (s, i) {
+    if (!s.joined) return '<tr><td></td><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td><td colspan="4" class="muted">아직 접속하지 않았어요 (지울 데이터 없음)</td></tr>';
+    return '<tr><td><input type="checkbox" data-r="' + i + '"' + (tResetSel[s.email] ? ' checked' : '') + ' aria-label="' + esc(s.name) + ' 선택"></td><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td><td class="l">' + esc(s.farmName) + '</td><td>Lv.' + s.level + '</td><td>' + (Object.keys(s.done).length) + '</td><td><span class="coin"></span> ' + fmt(s.gold) + '</td></tr>';
+  }).join('');
+  $('tbody').innerHTML =
+    '<div class="card wood" style="display:block"><div style="font-weight:600;margin-bottom:6px"><i class="ti ti-alert-triangle" aria-hidden="true"></i> 학생 농장 초기화</div>' +
+    '<div class="muted" style="margin-bottom:8px">연습으로 쌓인 데이터를 지우고 학생 농장을 <b>처음 상태</b>로 돌려요. 동물, 골드, 레벨, 꾸민 물건, 푼 차시 기록이 모두 사라지고 <b>되돌릴 수 없어요</b>. 학생이 다시 들어오면 새 농장과 처음 안내가 나와요. 선생님 본인 농장은 그대로예요(‘체험 도구’에서 따로 초기화).</div>' +
+    '<label style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input type="checkbox" id="rLog"' + (tResetLog ? ' checked' : '') + '> 풀이 기록(정답률 통계)도 함께 지우기</label>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="pbtn red" id="rSome"><i class="ti ti-trash" aria-hidden="true"></i> 선택한 학생 초기화 (<span id="rCnt">0</span>명)</button>' +
+    '<button class="pbtn red" id="rAll"><i class="ti ti-alert-triangle" aria-hidden="true"></i> 전체 학생 초기화</button></div></div>' +
+    '<div class="tscroll"><table class="tbl"><thead><tr><th><input type="checkbox" id="rAllChk" aria-label="모두 선택"></th><th>번호</th><th>이름</th><th>농장 이름</th><th>레벨</th><th>푼 차시</th><th>골드</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  function count() {
+    var n = 0; TD.students.forEach(function (s) { if (s.joined && tResetSel[s.email]) n++; });
+    $('rCnt').textContent = n; $('rSome').disabled = !n;
+  }
+  [].forEach.call($('tbody').querySelectorAll('[data-r]'), function (c) {
+    c.onchange = function () { var s = TD.students[+c.getAttribute('data-r')]; if (c.checked) tResetSel[s.email] = 1; else delete tResetSel[s.email]; count(); };
+  });
+  $('rAllChk').onchange = function () {
+    var on = this.checked;
+    TD.students.forEach(function (s) { if (s.joined) { if (on) tResetSel[s.email] = 1; else delete tResetSel[s.email]; } });
+    [].forEach.call($('tbody').querySelectorAll('[data-r]'), function (c) { c.checked = on; });
+    count();
+  };
+  $('rLog').onchange = function () { tResetLog = this.checked; };
+  $('rSome').onclick = function () {
+    var list = TD.students.filter(function (s) { return s.joined && tResetSel[s.email]; });
+    if (list.length) confirmReset(list.map(function (s) { return s.email; }), list.length + '명 (' + list.map(function (s) { return s.name; }).join(', ') + ')');
+  };
+  $('rAll').onclick = function () { confirmReset('ALL', '접속한 모든 학생'); };
+  count();
+}
+
+function confirmReset(target, label) {
+  openModal(head('ti-alert-triangle', '정말 초기화할까요?') +
+    '<p><b>' + esc(label) + '</b>의 농장을 처음 상태로 돌려요.' + (tResetLog ? ' 풀이 기록도 함께 지워요.' : ' 풀이 기록은 남겨 둬요.') + '</p>' +
+    '<p class="muted">동물, 골드, 레벨, 꾸민 물건이 모두 사라지고 되돌릴 수 없어요.</p>' +
+    '<div style="display:flex;gap:6px;justify-content:flex-end"><button class="pbtn w" id="rNo">취소</button><button class="pbtn red" id="rYes"><i class="ti ti-trash" aria-hidden="true"></i> 초기화하기</button></div><div class="err" id="rErr"></div>');
+  $('rNo').onclick = closeModal;
+  $('rYes').onclick = function () {
+    $('rYes').disabled = true;
+    srv('api_resetFarms', target, !!tResetLog).then(function (r) {
+      TD = r; tResetSel = {}; closeModal();
+      var i = r.resetInfo || {};
+      toast('농장 ' + (i.farms || 0) + '개를 초기화했어요' + (tResetLog ? ' (풀이 기록 ' + (i.logs || 0) + '줄 삭제)' : ''));
+      renderTeacher();
+    }).catch(function (e) { $('rYes').disabled = false; $('rErr').textContent = e.message; });
+  };
+}
+
+/* =====================================================================
+ * 텃밭 (실과 · 친환경 농업)
+ *  - 건물 옆 텃밭 칸을 누르면 텃밭 창이 열려요 (건물 메뉴의 '텃밭 · 작물 창고' 버튼도 있어요)
+ *  - 농장 하루 = 선생님이 새 차시를 여는 순간
+ * ===================================================================== */
+
+/* ---------- 작물 도트 그림 (16 x 16) ---------- */
+var CROP_DRAW = {
+  rice: function () { [2, 6, 10].forEach(function (x) { LN(x, 15, x + 1, 6, '#8fae3e'); LN(x + 1, 15, x + 2, 7, '#a7c24e'); E(x + 2.5, 5.5, 1.7, 3.2, '#e8c23a'); E(x + 3.2, 7, 1, 1.8, '#c9971c'); R(x + 2, 2, 1, 1, '#f5dc6a'); }); },
+  cabbage: function () { E(8, 10, 7, 5.5, '#4f9a32'); E(8, 9.5, 5.6, 4.6, '#7cc24a'); E(8, 9, 3.8, 3.3, '#b6e07a'); E(8, 8.5, 2, 1.8, '#e3f4b8'); LN(4, 12, 7, 9, '#3f7f28'); LN(12, 12, 9, 9, '#3f7f28'); },
+  carrot: function () { LN(8, 5, 5, 1, '#4caf3a'); LN(8, 5, 8, 0, '#5fc24a'); LN(8, 5, 11, 1, '#4caf3a'); for (var y = 5; y < 16; y++) { var w = Math.max(1, Math.round(6 * (1 - (y - 5) / 11))); R(8 - w / 2, y, w, 1, '#f08a24'); } R(6, 8, 2, 1, '#c96a12'); R(8, 11, 2, 1, '#c96a12'); R(6, 6, 1, 3, '#ffb05a'); },
+  corn: function () { E(8, 9, 4.6, 6.6, '#6fb23c'); E(8, 8, 2.8, 5.6, '#f5d33a'); for (var y = 4; y <= 12; y += 2) { R(7, y, 1, 1, '#d9a91a'); R(9, y + 1, 1, 1, '#d9a91a'); } LN(4, 15, 7, 7, '#4f9a2e'); LN(12, 15, 9, 7, '#4f9a2e'); R(8, 1, 1, 2, '#b98a4a'); },
+  tomato: function () { E(8, 10, 5.8, 5.2, '#e5402e'); E(8.5, 11, 5, 4, '#d63426'); E(6, 8.5, 1.6, 1.2, '#ff9a80'); R(6, 5, 5, 1, '#3f9a3a'); R(8, 3, 1, 3, '#3f9a3a'); R(5, 6, 1, 1, '#3f9a3a'); R(11, 6, 1, 1, '#3f9a3a'); },
+  basil: function () { R(8, 7, 1, 8, '#4a8f30'); E(5, 7, 2.8, 1.9, '#3f9a3a'); E(12, 7, 2.8, 1.9, '#3f9a3a'); E(5, 11, 2.5, 1.7, '#4caf3a'); E(12, 11, 2.5, 1.7, '#4caf3a'); E(8.5, 4, 2, 2.6, '#5fc24a'); R(4, 7, 2, 1, '#6fd25a'); R(11, 7, 2, 1, '#6fd25a'); },
+  scallion: function () { [4, 7, 10].forEach(function (x, i) { R(x, 1 + i, 2, 8 - i, '#4caf3a'); R(x, 1 + i, 1, 1, '#6fd25a'); R(x, 9, 2, 5, '#f4f2e6'); R(x + 1, 9, 1, 5, '#d9d4be'); }); R(3, 14, 10, 1, '#c9b48a'); },
+  bean: function () { [[4, 12], [6, 10], [8, 8], [10, 6], [12, 4]].forEach(function (c) { E(c[0], c[1], 2.5, 2.5, '#4f9a32'); }); [[4, 12], [6.5, 9.5], [9, 7], [11.5, 4.5]].forEach(function (c) { E(c[0], c[1], 1.3, 1.3, '#86c75a'); }); LN(12, 4, 14, 1, '#3f7f28'); }
+};
+var CROP_C = {};
+function cropIcon(k) {
+  if (!CROP_C[k]) CROP_C[k] = off(16, 16, CROP_DRAW[k] || CROP_DRAW.bean);
+  return CROP_C[k];
+}
+function cropImg(k, size, sil) {
+  var src = cropIcon(k), c = document.createElement('canvas'); c.width = 16; c.height = 16;
+  var x = c.getContext('2d'); x.drawImage(src, 0, 0);
+  if (sil) { x.globalCompositeOperation = 'source-in'; x.fillStyle = '#8a7a62'; x.fillRect(0, 0, 16, 16); }
+  c.style.width = c.style.height = (size || 40) + 'px'; c.style.imageRendering = 'pixelated';
+  return c;
+}
+
+/* ---------- 텃밭 땅 그림 (26 x 18) ---------- */
+var PW = 26, PH = 18, PGAP = 3;
+var PLOT_C = {
+  soil: off(PW, PH, function () { R(0, 0, PW, PH, '#8b5a2b'); R(1, 1, PW - 2, PH - 2, '#6b4423'); for (var y = 3; y < PH - 2; y += 4) { R(2, y, PW - 4, 2, '#54341a'); R(2, y - 1, PW - 4, 1, '#7f5530'); } }),
+  tired: off(PW, PH, function () { R(0, 0, PW, PH, '#8b7a62'); R(1, 1, PW - 2, PH - 2, '#a89a80'); LN(4, 4, 9, 9, '#7c6c56'); LN(9, 9, 7, 14, '#7c6c56'); LN(15, 3, 19, 8, '#7c6c56'); LN(19, 8, 22, 12, '#7c6c56'); LN(12, 10, 17, 13, '#7c6c56'); }),
+  rest: off(PW, PH, function () { R(0, 0, PW, PH, '#8b5a2b'); R(1, 1, PW - 2, PH - 2, '#6b4423'); for (var y = 3; y < PH - 2; y += 4) R(2, y, PW - 4, 2, '#54341a'); [[4, 4], [9, 8], [15, 4], [20, 9], [6, 12], [13, 13], [19, 14]].forEach(function (p) { R(p[0], p[1], 1, 1, '#5fa83a'); R(p[0] + 1, p[1] - 1, 1, 1, '#7cc24a'); }); }),
+  sprout: off(PW, PH, function () { [5, 12, 19].forEach(function (x) { [5, 11].forEach(function (y) { R(x, y, 1, 3, '#4caf3a'); R(x - 1, y - 1, 1, 1, '#6fd25a'); R(x + 1, y - 1, 1, 1, '#6fd25a'); }); }); })
+};
+
+/* ---------- 텃밭 위치 (건물 오른쪽, 자리가 없으면 왼쪽) ---------- */
+function gardenRects() {
+  if (!state || !state.g) return [];
+  var b = OBJ.filter(function (o) { return o.k === 'barn'; })[0]; if (!b) return [];
+  var d = def(b), o = own(), n = state.g.plots.length, tw = n * PW + (n - 1) * PGAP;
+  var x0 = b.x + d.w + 5, y0 = b.y + d.h - PH;
+  if (x0 + tw > o.x + o.w - 6) x0 = b.x - 5 - tw;
+  x0 = Math.round(Math.max(o.x + 6, Math.min(o.x + o.w - 6 - tw, x0)));
+  y0 = Math.round(Math.max(o.y + 16, Math.min(o.y + o.h - PH - 4, y0)));
+  var out = [];
+  for (var i = 0; i < n; i++) out.push({ x: x0 + i * (PW + PGAP), y: y0, w: PW, h: PH });
+  return out;
+}
+function gardenSolid(bx, by, bw, bh) {
+  var rs = gardenRects();
+  for (var i = 0; i < rs.length; i++) { var r = rs[i]; if (bx < r.x + r.w && bx + bw > r.x && by < r.y + r.h && by + bh > r.y + 3) return true; }
+  return false;
+}
+function hitGarden(p) {
+  if (mode !== 'play') return -1;
+  var rs = gardenRects();
+  for (var i = 0; i < rs.length; i++) { var r = rs[i]; if (p.x >= r.x - 1 && p.x < r.x + r.w + 1 && p.y >= r.y - 10 && p.y < r.y + r.h + 1) return i; }
+  return -1;
+}
+function drawGarden(now) {
+  var rs = gardenRects(); if (!rs.length) return;
+  var bob = Math.round(Math.sin(now / 260)) - 1;
+  rs.forEach(function (r, i) {
+    var pl = state.g.plots[i], st = pl.st;
+    E(r.x + r.w / 2, r.y + r.h, r.w / 2 + 1, 2, SH);
+    ctx.drawImage(st === 'tired' || st === 'heal' ? PLOT_C.tired : st === 'rest' ? PLOT_C.rest : PLOT_C.soil, r.x, r.y);
+    if (st === 'grow') ctx.drawImage(PLOT_C.sprout, r.x, r.y);
+    if (st === 'grow' && CF.GARDEN.CROPS[pl.c] && CF.GARDEN.CROPS[pl.c].side) { R(r.x + r.w - 6, r.y + 2, 4, 4, '#fff8e1'); ctx.drawImage(cropIcon(pl.c), 0, 0, 16, 16, r.x + r.w - 6, r.y + 2, 4, 4); }
+    if (st === 'ready') {
+      ctx.drawImage(cropIcon(pl.c), r.x + 1, r.y - 4);
+      ctx.drawImage(cropIcon(pl.c), r.x + 9, r.y - 2);
+      // 반짝이는 별 = 수확할 수 있어요
+      var sx0 = r.x + r.w / 2, sy0 = r.y - 12 + bob;
+      R(sx0 - 1, sy0 - 3, 2, 7, '#ffd23f'); R(sx0 - 4, sy0, 8, 1, '#ffd23f'); R(sx0 - 2, sy0 - 1, 4, 3, '#fff3a0');
+    }
+    if (st === 'empty') { var ex = r.x + r.w / 2, ey = r.y - 6 + bob; R(ex - 3, ey - 3, 7, 7, 'rgba(255,248,225,0.85)'); R(ex - 2, ey, 5, 1, '#3f7a24'); R(ex, ey - 2, 1, 5, '#3f7a24'); }
+    if (st === 'heal') { var hx = r.x + r.w / 2, hy = r.y - 9 + bob; R(hx - 2, hy - 3, 5, 9, '#f08a24'); R(hx, hy - 2, 1, 4, '#fff'); R(hx, hy + 3, 1, 1, '#fff'); }
+  });
+}
+
+/* ---------- 공통 ---------- */
+var gTab = 'field', gSel = 0;
+function GC() { return CF.GARDEN; }
+function cropNm(k) { return (GC().CROPS[k] || {}).name || k; }
+function shuf(a) { a = a.slice(); for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+function ecoTag(eco) { return eco ? '<span class="gtag e">친환경</span>' : '<span class="gtag n">일반</span>'; }
+function markOf(k) { var d = state.g.dex[k], m = GC().MARKS; if (!d) return 0; return d.e >= m[1] ? 2 : d.e >= m[0] ? 1 : 0; }
+function markTag(m) { return m === 2 ? '<span class="gtag m2">🌿 유기농</span>' : m === 1 ? '<span class="gtag m1">🟢 무농약</span>' : ''; }
+function favNames(k) { return (GC().CROPS[k].fav || []).map(function (t) { return nm(t); }).join(', '); }
+function buddyNear(i) {
+  var P = state.g.plots, pl = P[i], C = GC().CROPS[pl.c]; if (!C) return false;
+  return [P[i - 1], P[i + 1]].some(function (q) {
+    if (!q || !q.c || q.st === 'tired' || q.st === 'heal') return false;
+    return C.buddy ? q.c === C.buddy : (GC().CROPS[q.c].buddy === pl.c);
+  });
+}
+function invCount() { var n = 0; Object.keys(state.g.inv).forEach(function (k) { n += state.g.inv[k]; }); return n; }
+
+function openGarden(i) {
+  hideMenu();
+  if (typeof i === 'number') gSel = i;
+  gTab = 'field';
+  renderGarden();
+}
+function gardenShell(body) {
+  var tabs = [['field', 'ti-seedling', '밭'], ['store', 'ti-basket', '작물 창고 (' + invCount() + ')'], ['dex', 'ti-book', '작물 도감']];
+  openModal(head('ti-seedling', '텃밭 · 친환경 농업') +
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="pbtn w sm' + (gTab === t[0] ? ' on' : '') + '" data-gt="' + t[0] + '"><i class="ti ' + t[1] + '" aria-hidden="true"></i> ' + t[2] + '</button>'; }).join('') + '</div>' +
+    '<div id="gBody">' + body + '</div><div class="err" id="gErr"></div>');
+  [].forEach.call($('mbox').querySelectorAll('[data-gt]'), function (b) { b.onclick = function () { gTab = b.getAttribute('data-gt'); renderGarden(); }; });
+}
+function renderGarden() {
+  if (gTab === 'store') return gardenStore();
+  if (gTab === 'dex') return gardenDex();
+  gardenField();
+}
+function backBtn(label) { return '<button class="pbtn w" id="gBack"><i class="ti ti-arrow-left" aria-hidden="true"></i> ' + (label || '텃밭으로') + '</button>'; }
+function bindBack(fn) { var b = $('gBack'); if (b) b.onclick = fn || function () { gTab = 'field'; renderGarden(); }; }
+
+/* ---------- 밭 ---------- */
+function plotThumb(pl) {
+  return off(PW + 4, PH + 10, function () {
+    var st = pl.st;
+    X.drawImage(st === 'tired' || st === 'heal' ? PLOT_C.tired : st === 'rest' ? PLOT_C.rest : PLOT_C.soil, 2, 8);
+    if (st === 'grow') X.drawImage(PLOT_C.sprout, 2, 8);
+    if (st === 'ready') { X.drawImage(cropIcon(pl.c), 3, 3); X.drawImage(cropIcon(pl.c), 11, 5); }
+  });
+}
+function gardenField() {
+  var g = state.g, html = '';
+  html += '<div class="muted" style="margin-bottom:8px">작물에 어울리는 <b>친환경 농법</b>으로 심으면 <b>다음 차시 문제를 다 푼 뒤</b> 수확해요. 친환경이 아닌 방법은 바로 수확되지만 땅이 지쳐서 쉬어야 해요.</div>';
+  if (g.ev) html += '<div class="card" style="background:#fff1d6"><b><i class="ti ti-alert-triangle" aria-hidden="true"></i> ' + esc(GC().EVENTS[g.ev.k].t) + '</b> 텃밭에 일이 생겼어요. 수확하기를 눌러 해결해요.</div>';
+  html += '<div class="gplots" id="gPlots"></div>';
+  html += '<details class="grule"><summary>텃밭 규칙 보기</summary><ul>' +
+    '<li>칸 수는 건물을 업그레이드하면 늘어나요 (작은 오두막 1칸 → 나무 헛간 2칸 → 빨간 헛간 3칸).</li>' +
+    '<li>친환경 농법: 다음 차시 문제를 다 풀면 수확해요. 수확한 날 바로 다시 심을 수 있어요.</li>' +
+    '<li>친환경이 아닌 방법: 바로 1개 수확, 대신 땅이 지쳐요 → 다음 차시에 <b>땅 살리기</b> → 그다음 차시부터 다시 심어요.</li>' +
+    '<li>수확하는 날 진딧물·잡초·가뭄 같은 일이 생길 수 있어요. 친환경으로 대처해야 친환경 작물이 돼요.</li>' +
+    '<li>짝꿍 작물(바질·쪽파·콩)을 주 작물 바로 옆 칸에 심으면 수확량이 늘 수 있어요.</li>' +
+    '<li>닭·소·염소·양·말이 농장에 있으면 동물 똥 퇴비로, 대농장이 되면 퇴비 창고로 수확량이 늘 수 있어요 (친환경일 때만).</li>' +
+    '<li>같은 작물을 친환경으로 ' + GC().MARKS[0] + '번 수확하면 무농약, ' + GC().MARKS[1] + '번이면 유기농 마크! 주 작물 5종이 모두 유기농이면 친환경 온실을 받아요.</li></ul></details>';
+  gardenShell(html);
+  var box = $('gPlots');
+  g.plots.forEach(function (pl, i) {
+    var d = document.createElement('div'); d.className = 'item gplot' + (i === gSel ? ' sel' : '');
+    var th = plotThumb(pl); th.style.width = (PW + 4) * 3 + 'px'; th.style.height = (PH + 10) * 3 + 'px'; d.appendChild(th);
+    var t = '', p = '', btn = null;
+    if (pl.st === 'empty') { t = (i + 1) + '번 칸 · 빈 땅'; p = '무엇을 심을까요?'; btn = ['ti-seedling', '심기', 'g']; }
+    else if (pl.st === 'grow') {
+      t = esc(cropNm(pl.c)) + ' 자라는 중 ' + ecoTag(1);
+      p = pl.p < state.day ? '오늘 문제를 다 풀면 수확할 수 있어요!' : '다음 차시 문제를 다 풀면 수확해요';
+      if (buddyNear(i)) p += '<br>🤝 짝꿍 작물이 옆에 있어요';
+    }
+    else if (pl.st === 'ready') { t = esc(cropNm(pl.c)) + ' 다 자랐어요!'; p = buddyNear(i) ? '🤝 짝꿍 작물이 옆에 있어요' : '수확할 수 있어요'; btn = ['ti-basket', '수확하기', 'g']; }
+    else if (pl.st === 'tired') { t = '지친 땅'; p = '다음 차시에 땅 살리기를 할 수 있어요'; }
+    else if (pl.st === 'heal') { t = '지친 땅'; p = '땅을 살려야 다시 심을 수 있어요'; btn = ['ti-shovel', '땅 살리기', '']; }
+    else if (pl.st === 'rest') { t = '땅이 쉬는 중'; p = '다음 차시부터 다시 심을 수 있어요'; }
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + t + '</div><div class="p">' + p + '</div>');
+    if (btn) {
+      var b = document.createElement('button'); b.className = 'pbtn sm ' + btn[2]; b.innerHTML = '<i class="ti ' + btn[0] + '" aria-hidden="true"></i> ' + btn[1];
+      b.onclick = function () { gSel = i; if (pl.st === 'empty') plantPick(i); else if (pl.st === 'ready') doHarvest(i); else healPick(i); };
+      d.appendChild(b);
+    }
+    box.appendChild(d);
+  });
+}
+
+/* 심기 1: 작물 고르기 */
+function plantPick(i) {
+  var G2 = GC(), html = '<div class="gh">' + (i + 1) + '번 칸에 무엇을 심을까요?</div><div class="grid" id="gMain"></div>' +
+    '<div class="gh">짝꿍 작물 <span class="muted">(농법을 고르지 않아요 · 주 작물 바로 옆 칸에 심으면 수확량이 늘 수 있어요)</span></div><div class="grid" id="gSide"></div><div style="margin-top:10px">' + backBtn() + '</div>';
+  gardenShell(html); bindBack();
+  G2.MAIN.forEach(function (k) {
+    var C = G2.CROPS[k], d = document.createElement('div'); d.className = 'item';
+    d.appendChild(cropImg(k, 40));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(C.name) + ' ' + markTag(markOf(k)) + '</div><div class="p">좋아하는 동물: ' + esc(favNames(k)) + (C.buddy ? '<br>짝꿍: ' + esc(cropNm(C.buddy)) : '') + '</div>');
+    var b = document.createElement('button'); b.className = 'pbtn sm g'; b.textContent = '고르기';
+    b.onclick = function () { plantMethod(i, k); };
+    d.appendChild(b); $('gMain').appendChild(d);
+  });
+  G2.SIDE.forEach(function (k) {
+    var C = G2.CROPS[k], d = document.createElement('div'); d.className = 'item';
+    d.appendChild(cropImg(k, 40));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(C.name) + '</div><div class="p">' + esc(C.desc || '') + '</div>');
+    var b = document.createElement('button'); b.className = 'pbtn sm g'; b.textContent = '심기';
+    b.onclick = function () { b.disabled = true; srv('api_plant', i, k, '').then(function (r) { applyFarm(r.farm); showFb(r.fb); }).catch(function () { b.disabled = false; }); };
+    d.appendChild(b); $('gSide').appendChild(d);
+  });
+}
+
+/* 심기 2: 농법 고르기 (어느 것이 친환경인지는 고른 뒤에 알려 줘요) */
+function plantMethod(i, k) {
+  var C = GC().CROPS[k], own2 = ownedNow();
+  var html = '<div style="display:flex;gap:10px;align-items:center;margin-bottom:6px" id="gHead"></div>' +
+    '<div class="muted" style="margin-bottom:8px">어떤 방법이 <b>친환경 농업</b>일까요? 실과 시간에 배운 내용을 떠올려 보세요.</div><div class="gopts" id="gOpts"></div><div style="margin-top:10px">' + backBtn('작물 다시 고르기') + '</div>';
+  gardenShell(html); bindBack(function () { plantPick(i); });
+  $('gHead').appendChild(cropImg(k, 40));
+  $('gHead').insertAdjacentHTML('beforeend', '<div><div style="font-weight:700;font-size:17px">' + esc(C.name) + ' 키우기</div><div class="muted">어떻게 키울까요?</div></div>');
+  shuf(C.opts).forEach(function (o) {
+    var O = GC().OPTS[o], need = O.need || [], ok = !need.length || need.some(function (t) { return own2[t]; });
+    var b = document.createElement('button'); b.className = 'gopt';
+    b.innerHTML = '<b>' + esc(O.t) + '</b><span class="muted">' + esc(O.d) + (ok ? '' : '<br><i class="ti ti-lock" aria-hidden="true"></i> ' + esc(nm(need[0])) + iga(nm(need[0])) + ' 있어야 고를 수 있어요') + '</span>';
+    if (!ok) b.disabled = true;
+    b.onclick = function () {
+      [].forEach.call($('gOpts').querySelectorAll('button'), function (x) { x.disabled = true; });
+      srv('api_plant', i, k, o).then(function (r) { applyFarm(r.farm); showFb(r.fb); }).catch(function () { plantMethod(i, k); });
+    };
+    $('gOpts').appendChild(b);
+  });
+}
+
+/* 고른 결과 안내 */
+function showFb(fb, after) {
+  var html = '<div class="gfb ' + (fb.ok ? 'good' : 'bad') + '" id="gFb"></div><div style="text-align:center;margin-top:10px" id="gFbBtn"></div>';
+  gardenShell(html);
+  var box = $('gFb'), btns = $('gFbBtn');
+  if (fb.c) box.appendChild(cropImg(fb.c, 48));
+  if (fb.side) {
+    box.insertAdjacentHTML('beforeend', '<div class="big">🌱 ' + esc(cropNm(fb.c)) + iga(cropNm(fb.c)).replace('이', '을').replace('가', '를') + ' 심었어요</div><p>' + esc(GC().CROPS[fb.c].desc || '') + '</p><p>다음 차시 문제를 다 풀면 수확할 수 있어요.</p>');
+  } else if (fb.ok) {
+    box.insertAdjacentHTML('beforeend', '<div class="big">🌱 친환경 농법이에요!</div><p><b>' + esc(GC().OPTS[fb.opt].t) + '</b> · ' + esc(fb.why) + '</p>' + (after ? '' : '<p>다음 차시 문제를 다 풀면 수확할 수 있어요.</p>'));
+  } else {
+    box.insertAdjacentHTML('beforeend', '<div class="big">⚠️ 친환경 농법이 아니에요</div><p><b>' + esc(GC().OPTS[fb.opt].t) + '</b> · ' + esc(fb.why) + '</p>' +
+      (fb.got ? '<p>일반 ' + esc(cropNm(fb.got.c)) + ' 1개를 바로 수확해서 작물 창고에 넣었어요.</p><p><b>땅이 지쳤어요.</b> 다음 차시에 땅 살리기를 해야 그다음 차시부터 다시 심을 수 있어요.</p>' : ''));
+  }
+  var b = document.createElement('button'); b.className = 'pbtn g'; b.innerHTML = after ? '<i class="ti ti-basket" aria-hidden="true"></i> 계속 수확하기' : '<i class="ti ti-check" aria-hidden="true"></i> 텃밭으로';
+  b.onclick = after || function () { gTab = 'field'; renderGarden(); };
+  btns.appendChild(b);
+}
+
+/* 수확 */
+function doHarvest(i) {
+  srv('api_harvest', i).then(function (r) {
+    applyFarm(r.farm);
+    if (r.event) showEvent(i, r.event.k); else showHarvest(r);
+  }).catch(function () { renderGarden(); });
+}
+function showEvent(i, k) {
+  var E2 = GC().EVENTS[k];
+  var html = '<div class="gfb"><div class="big">' + esc(E2.t) + '</div><p>' + esc(E2.d) + '</p></div><div class="gopts" id="gOpts"></div>';
+  gardenShell(html);
+  shuf(E2.opts).forEach(function (o) {
+    var O = GC().OPTS[o], b = document.createElement('button'); b.className = 'gopt';
+    b.innerHTML = '<b>' + esc(O.t) + '</b><span class="muted">' + esc(O.d) + '</span>';
+    b.onclick = function () {
+      [].forEach.call($('gOpts').querySelectorAll('button'), function (x) { x.disabled = true; });
+      srv('api_eventAnswer', o).then(function (r) {
+        applyFarm(r.farm);
+        if (!r.fb.ok) r.fb.why += ' 오늘 수확하는 작물은 친환경 작물이 아니고, 수확한 땅은 지쳐요.';
+        showFb(r.fb, function () { doHarvest(i); });
+      }).catch(function () { showEvent(i, k); });
+    };
+    $('gOpts').appendChild(b);
+  });
+}
+var BONUS_TXT = { buddy: '🤝 짝꿍 작물 덕분에 +1', manure: '💩 동물 똥 퇴비 덕분에 +1', shed: '🏚️ 퇴비 창고 덕분에 +1' };
+function showHarvest(r) {
+  var g = r.got, html = '<div class="gfb good" id="gFb"></div><div style="text-align:center;margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap" id="gFbBtn"></div>';
+  gardenShell(html);
+  var box = $('gFb'), row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:4px;justify-content:center';
+  for (var k = 0; k < g.n; k++) row.appendChild(cropImg(g.c, 44));
+  box.appendChild(row);
+  box.insertAdjacentHTML('beforeend', '<div class="big">' + (g.eco ? '친환경 ' : '일반 ') + esc(cropNm(g.c)) + ' ' + g.n + '개를 수확했어요!</div>' +
+    (g.bonus.length ? '<p>' + g.bonus.map(function (b) { return BONUS_TXT[b]; }).join(' · ') + '</p>' : '') +
+    (g.mark ? '<div class="lvup">' + (g.mark === 2 ? '🌿 ' + esc(cropNm(g.c)) + ' 유기농 마크를 받았어요!' : '🟢 ' + esc(cropNm(g.c)) + ' 무농약 마크를 받았어요!') + '</div>' : '') +
+    (g.tired ? '<p class="err">친환경 방법으로 대처하지 않아서 땅이 지쳤어요. 다음 차시에 땅 살리기를 해요.</p>' : '') +
+    (r.award ? '<div class="lvup">🏆 작물 5종 모두 유기농! 특별한 <b>친환경 온실</b>을 받았어요. 보관함에서 배치할 수 있어요.</div>' : '') +
+    (favNames(g.c) ? '<p class="muted">좋아하는 동물: ' + esc(favNames(g.c)) + ' · 먹이로 주면 골드를 더 받아요</p>' : ''));
+  var b1 = document.createElement('button'); b1.className = 'pbtn'; b1.innerHTML = '<i class="ti ti-basket" aria-hidden="true"></i> 먹이 주러 가기';
+  b1.onclick = function () { gTab = 'store'; renderGarden(); };
+  var b2 = document.createElement('button'); b2.className = 'pbtn g'; b2.innerHTML = '<i class="ti ti-seedling" aria-hidden="true"></i> 텃밭으로';
+  b2.onclick = function () { gTab = 'field'; renderGarden(); };
+  $('gFbBtn').appendChild(b1); $('gFbBtn').appendChild(b2);
+}
+
+/* 땅 살리기 */
+function healPick(i) {
+  var html = '<div class="gfb"><div class="big">지친 땅을 어떻게 살릴까요?</div><p class="muted">땅을 건강하게 되돌리는 친환경 방법을 골라요.</p></div><div class="gopts" id="gOpts"></div><div style="margin-top:10px">' + backBtn() + '</div>';
+  gardenShell(html); bindBack();
+  shuf(GC().HEAL).forEach(function (o) {
+    var O = GC().OPTS[o], b = document.createElement('button'); b.className = 'gopt';
+    b.innerHTML = '<b>' + esc(O.t) + '</b><span class="muted">' + esc(O.d) + '</span>';
+    b.onclick = function () {
+      [].forEach.call($('gOpts').querySelectorAll('button'), function (x) { x.disabled = true; });
+      srv('api_heal', i, o).then(function (r) {
+        applyFarm(r.farm);
+        var fb = r.fb;
+        var html2 = '<div class="gfb ' + (fb.ok ? 'good' : 'bad') + '"><div class="big">' + (fb.ok ? '🌱 땅이 다시 건강해지고 있어요!' : '⚠️ 땅이 아직 지쳐 있어요') + '</div><p><b>' + esc(GC().OPTS[fb.opt].t) + '</b> · ' + esc(fb.why) + '</p><p>' +
+          (fb.ok ? '다음 차시부터 다시 심을 수 있어요.' : '다음 차시에 다시 땅 살리기를 해요.') + '</p></div><div style="text-align:center;margin-top:10px">' + backBtn() + '</div>';
+        gardenShell(html2); bindBack();
+      }).catch(function () { healPick(i); });
+    };
+    $('gOpts').appendChild(b);
+  });
+}
+
+/* ---------- 작물 창고 · 먹이 주기 ---------- */
+function invKeys() {
+  var G2 = GC(), order = G2.MAIN.concat(G2.SIDE), out = [];
+  order.forEach(function (k) { ['1', '0'].forEach(function (e) { var key = k + '|' + e; if (state.g.inv[key] > 0) out.push(key); }); });
+  return out;
+}
+function feedPct(t, key) {
+  var F = GC().FEED, c = key.split('|')[0], eco = key.split('|')[1] === '1', fav = (GC().CROPS[c].fav || []).indexOf(t) >= 0;
+  return { p: F.base + (eco ? F.eco : 0) + (fav ? F.fav : 0), fav: fav };
+}
+function gardenStore() {
+  var F = GC().FEED;
+  var html = '<div class="muted" style="margin-bottom:8px">작물을 동물에게 먹이면 그 동물 하루 골드의 <b>' + Math.round(F.base * 100) + '%</b>를 바로 받아요. 친환경 작물 <b>+' + Math.round(F.eco * 100) + '%</b>, 좋아하는 작물 <b>+' + Math.round(F.fav * 100) + '%</b>. 동물마다 한 차시에 한 번 먹어요.</div><div class="grid" id="gInv"></div>';
+  gardenShell(html);
+  var keys = invKeys();
+  if (!keys.length) { $('gInv').innerHTML = '<div class="muted">창고가 비어 있어요. 텃밭에서 작물을 수확해 보세요.</div>'; return; }
+  keys.forEach(function (key) {
+    var c = key.split('|')[0], eco = key.split('|')[1] === '1', d = document.createElement('div'); d.className = 'item';
+    d.appendChild(cropImg(c, 40));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(cropNm(c)) + ' × ' + state.g.inv[key] + '</div><div class="p">' + ecoTag(eco) + (favNames(c) ? '<br>좋아하는 동물: ' + esc(favNames(c)) : '') + '</div>');
+    var b = document.createElement('button'); b.className = 'pbtn sm g'; b.innerHTML = '<i class="ti ti-bone" aria-hidden="true"></i> 먹이 주기';
+    b.onclick = function () { feedPick(key); };
+    d.appendChild(b); $('gInv').appendChild(d);
+  });
+}
+function feedPick(key) {
+  if (!(state.g.inv[key] > 0)) { gTab = 'store'; renderGarden(); return; }
+  var c = key.split('|')[0], eco = key.split('|')[1] === '1';
+  var html = '<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px" id="gHead"></div><div class="grid" id="gAn"></div><div style="margin-top:10px">' + backBtn('작물 창고로') + '</div>';
+  gardenShell(html); bindBack(function () { gTab = 'store'; renderGarden(); });
+  $('gHead').appendChild(cropImg(c, 36));
+  $('gHead').insertAdjacentHTML('beforeend', '<div><b>' + esc(cropNm(c)) + '</b> ' + ecoTag(eco) + ' × ' + state.g.inv[key] + '<div class="muted">누구에게 줄까요? (보관함 동물은 먹을 수 없어요)</div></div>');
+  var fed = {}; state.animals.forEach(function (a) { if (a.e === TODAY) fed[a.id] = 1; });
+  var list = A.map(function (a) { var f = feedPct(a.t, key); return { a: a, fav: f.fav, amt: Math.max(1, Math.round(dailyAmount(a.t, a.id, TODAY) * f.p)), fed: !!fed[a.id] }; });
+  list.sort(function (x, y) { return (x.fed - y.fed) || (y.fav - x.fav) || (y.amt - x.amt); });
+  if (!list.length) { $('gAn').innerHTML = '<div class="muted">농장에 동물이 없어요.</div>'; return; }
+  list.forEach(function (it) {
+    var d = document.createElement('div'); d.className = 'item' + (it.fed ? ' no' : '');
+    d.appendChild(animalIcon(it.a.t, false, 44));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(nm(it.a.t)) + (it.fav ? ' ❤️' : '') + '</div><div class="p">' + (it.fed ? '이번 차시에 먹었어요' : '<span class="coin"></span> +' + it.amt + (it.fav ? ' (좋아해요!)' : '')) + '</div>');
+    if (!it.fed) {
+      var b = document.createElement('button'); b.className = 'pbtn sm'; b.textContent = '주기';
+      b.onclick = function () {
+        b.disabled = true;
+        srv('api_feed', it.a.id, key).then(function (r) {
+          applyFarm(r.farm);
+          A.forEach(function (x) { if (x.id === it.a.id) x.j = performance.now(); });
+          var gw = $('gwrap'); gw.classList.add('pop'); setTimeout(function () { gw.classList.remove('pop'); }, 150);
+          toast(nm(it.a.t) + iga(nm(it.a.t)) + ' 맛있게 먹었어요! +' + r.amt + '골드' + (r.fav ? ' ❤️' : ''));
+          feedPick(key);
+        }).catch(function () { b.disabled = false; });
+      };
+      d.appendChild(b);
+    }
+    $('gAn').appendChild(d);
+  });
+}
+
+/* ---------- 작물 도감 ---------- */
+function gardenDex() {
+  var G2 = GC(), dex = state.g.dex, org = 0;
+  G2.MAIN.forEach(function (k) { if (markOf(k) === 2) org++; });
+  var html = '<div class="card">' + (state.g.award ? '🏆 주 작물 5종을 모두 유기농으로 키워서 <b>친환경 온실</b>을 받았어요!' : '🏆 주 작물 5종을 모두 <b>유기농</b>(친환경 수확 ' + G2.MARKS[1] + '번)으로 키우면 특별한 <b>친환경 온실</b>을 받아요. (' + org + ' / 5)') + '</div>' +
+    '<div class="gh">주 작물 · 친환경 ' + G2.MARKS[0] + '번 수확 = 🟢 무농약, ' + G2.MARKS[1] + '번 = 🌿 유기농</div><div class="grid" id="gDexM"></div><div class="gh">짝꿍 작물</div><div class="grid" id="gDexS"></div>';
+  gardenShell(html);
+  function card(k, side) {
+    var d0 = dex[k], has = !!d0, d = document.createElement('div'); d.className = 'item' + (has ? '' : ' no');
+    d.appendChild(cropImg(k, 40, !has));
+    var m = markOf(k);
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + (has ? esc(cropNm(k)) : '???') + '</div><div class="p">' +
+      (has ? '수확 ' + d0.h + '번 · 친환경 ' + d0.e + '번' + (side ? '' : '<br>' + (markTag(m) || '아직 마크 없음')) : '아직 수확하지 못했어요') + '</div>');
+    return d;
+  }
+  G2.MAIN.forEach(function (k) { $('gDexM').appendChild(card(k)); });
+  G2.SIDE.forEach(function (k) { $('gDexS').appendChild(card(k, true)); });
+}
+
+/* ---------- 친환경 온실 (특별한 물건) ---------- */
+ITEMS.greenhouse = {
+  name: '친환경 온실', price: 0, w: 44, h: 38, fp: [2, 24, 40, 12], special: 1, desc: '작물 5종을 모두 유기농으로 키운 농장만 가질 수 있어요',
+  c: off(44, 38, function () {
+    E(22, 36, 21, 2, SH);
+    R(2, 14, 40, 22, '#cfeaf2'); R(2, 14, 40, 22, 'rgba(255,255,255,0.15)');
+    for (var y = 0; y < 13; y++) { var hw = Math.round(20 * (y + 1) / 13); R(22 - hw, 1 + y, hw * 2 + 1, 1, '#bfe3ee'); }
+    for (var x = 2; x <= 42; x += 8) R(x, 14, 1, 22, '#f4f4f4');
+    R(2, 14, 41, 1, '#f4f4f4'); R(2, 25, 41, 1, '#f4f4f4'); R(2, 35, 41, 1, '#9aa8b0');
+    LN(2, 14, 22, 1, '#f4f4f4'); LN(42, 14, 22, 1, '#f4f4f4'); LN(12, 14, 22, 1, '#e6eef2'); LN(32, 14, 22, 1, '#e6eef2');
+    R(18, 26, 8, 9, '#8fd0de'); R(18, 26, 8, 1, '#f4f4f4'); R(22, 26, 1, 9, '#f4f4f4');
+    [[5, 29], [10, 31], [28, 30], [34, 29], [38, 31]].forEach(function (p, i) { E(p[0] + 1, p[1], 2.5, 2.2, i % 2 ? '#4caf3a' : '#6fb23c'); R(p[0] + 1, p[1] - 2, 1, 1, ['#e5402e', '#f5d33a', '#e5402e', '#ff7ab0', '#f5d33a'][i]); });
+    R(6, 4, 3, 2, 'rgba(255,255,255,0.8)'); R(9, 17, 4, 1, 'rgba(255,255,255,0.8)'); R(31, 18, 3, 1, 'rgba(255,255,255,0.8)');
+    R(20, 0, 5, 3, '#3f9a3a'); R(21, 1, 3, 1, '#9fd36a');
+  })
+};
+
+/* ---------- 건물 메뉴에 텃밭 버튼 ---------- */
+(function () {
+  var up = $('mUp'); if (!up || $('mGarden')) return;
+  var b = document.createElement('button'); b.className = 'pbtn wide g'; b.id = 'mGarden';
+  b.innerHTML = '<i class="ti ti-seedling" aria-hidden="true"></i> 텃밭 · 작물 창고';
+  b.onclick = function () { openGarden(); };
+  up.parentNode.insertBefore(b, up);
+})();
+
+/* ---------- 처음 안내 (동전 = 차시마다, 텃밭) ---------- */
+INTRO[2][2] = INTRO[2][2].replace('하루에 한 번씩 받을 수 있고, 다음 날이 되면 다시 생겨요', '한 차시에 한 번씩 받을 수 있고, 선생님이 다음 차시를 열면 다시 생겨요');
+INTRO.push(['ti-seedling', '텃밭에서 친환경 농사를 지어요', '건물 옆 텃밭을 눌러 작물을 심어요. 작물에 어울리는 친환경 농법을 고르면 다음 차시 문제를 다 푼 뒤 수확할 수 있어요. 친환경이 아닌 방법은 바로 수확되지만 땅이 지쳐서 쉬어야 해요. 수확한 작물을 동물에게 먹이면 골드를 받아요!']);
+
+/* ---------- 문제 결과 화면: 텃밭 수확 안내 ---------- */
+var _showResultGarden = showResult;
+showResult = function (res) {
+  _showResultGarden(res);
+  var card = $('qbox').querySelector('.qcard.done'); if (!card || !state || !state.g) return;
+  var can = state.g.plots.some(function (pl) { return pl.c && (pl.st === 'grow' || pl.st === 'ready') && pl.p < state.day; });
+  if (can && card.lastElementChild) card.lastElementChild.insertAdjacentHTML('beforebegin', '<div class="lvup" style="background:#5fa83a"><i class="ti ti-seedling" aria-hidden="true"></i> 텃밭 작물을 수확할 수 있어요! 농장 건물 옆 텃밭을 눌러 보세요</div>');
+};
+
+/* ---------- 교사 화면: 농장 하루 안내 + 텃밭 체험 도구 ---------- */
+var _tLessonTabBase = tLessonTab;
+tLessonTab = function () {
+  _tLessonTabBase();
+  var c = $('tbody').querySelector('.card'); if (!c) return;
+  c.insertAdjacentHTML('beforeend', '<div class="muted" style="margin-top:6px"><i class="ti ti-sun" aria-hidden="true"></i> 지금 농장 하루: <b>' + (TD.day | 0) + '번째</b> · <b>새 차시를 열면</b> 농장 하루가 지나요 (동물 동전·먹이가 다시 생기고 텃밭 작물이 자라요). 같은 차시를 다시 열면 지나가지 않아요.</div>');
+};
+var _tToolsTabBase = tToolsTab;
+tToolsTab = function () {
+  _tToolsTabBase();
+  $('tbody').insertAdjacentHTML('beforeend', '<div class="card wood"><div style="font-weight:600;margin-bottom:6px"><i class="ti ti-seedling" aria-hidden="true"></i> 텃밭 체험</div>' +
+    '<div class="muted" style="margin-bottom:8px">선생님 텃밭만 하루가 지난 것처럼 만들어요. 심어 둔 작물을 바로 수확하고, 지친 땅 살리기도 해 볼 수 있어요. 학생 농장과 농장 하루는 그대로예요.</div>' +
+    '<button class="pbtn g" id="tGardenDay"><i class="ti ti-player-skip-forward" aria-hidden="true"></i> 내 텃밭 하루 지나가게 하기</button></div>');
+  $('tGardenDay').onclick = function () {
+    srv('api_teacherTool', 'garden').then(function (r) { applyFarm(r.farm); QUIZ = r.quiz; updateBadge(); toast('선생님 텃밭이 하루 지났어요'); }).catch(function () {});
+  };
+};
+</script>
+
+<style>
+.gplots{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
+.gplot canvas{image-rendering:pixelated}
+.gplot.sel{border-color:var(--wood);box-shadow:0 0 0 2px var(--yellow)}
+.gtag{display:inline-block;font-size:11px;font-weight:600;border-radius:10px;padding:0 7px;border:1px solid;vertical-align:1px}
+.gtag.e{background:#e8f6d7;color:#3f7a24;border-color:#9fd36a}
+.gtag.n{background:#eee7d8;color:#6a5a48;border-color:#c9b896}
+.gtag.m1{background:#e8f6d7;color:#2f6a1c;border-color:#7cbf4a}
+.gtag.m2{background:#d7f0c4;color:#1f5a12;border-color:#3f7a24}
+.gopts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.gopt{cursor:pointer;text-align:left;padding:10px 12px;border:2px solid var(--line);border-radius:7px;background:var(--paper2);font:inherit;color:var(--ink);line-height:1.5}
+.gopt:hover{background:#fff3cc}
+.gopt[disabled]{opacity:.5;cursor:default}
+.gopt b{display:block;font-size:15px;margin-bottom:2px}
+.gfb{text-align:center;padding:4px}
+.gfb canvas{image-rendering:pixelated;margin:0 auto}
+.gfb .big{font-size:20px;font-weight:700;margin:6px 0}
+.gfb.good .big{color:var(--ok)}.gfb.bad .big{color:var(--bad)}
+.gfb p{margin:6px 0;line-height:1.7;font-size:14px}
+details.grule{margin-top:10px;font-size:13px;color:var(--ink2)}
+details.grule summary{cursor:pointer;font-weight:600;color:var(--wood)}
+details.grule ul{margin:6px 0 0;padding-left:18px;line-height:1.7}
+</style>

@@ -1,0 +1,163 @@
+<script>
+/* 수학 농장 · 문제 풀기 화면 */
+var QV = null, qBusy = false, qChoice = '';
+
+function openQuizMenu() {
+  $('quiz').classList.add('show');
+  $('qbox').innerHTML = '<div class="muted" style="padding:30px;text-align:center">불러오는 중…</div>';
+  srv('api_quizMenu').then(function (m) { QUIZ = m; updateBadge(); renderMenu(); }).catch(function () { closeQuiz(); });
+}
+function closeQuiz() { $('quiz').classList.remove('show'); QV = null; }
+
+function renderMenu() {
+  var list = QUIZ.list, html = '<div class="qhead"><div class="t"><i class="ti ti-pencil" aria-hidden="true"></i> 문제 풀기</div><button class="pbtn w" onclick="closeQuiz()"><i class="ti ti-arrow-left" aria-hidden="true"></i> 농장으로</button></div><div class="qmenu">';
+  if (!list.length) html += '<div class="card wood">지금은 열린 차시가 없어요. 선생님이 차시를 열면 풀 수 있어요.</div>';
+  list.forEach(function (x) {
+    var tag = x.kind === 'today' ? '오늘의 문제' : (x.kind === 'reopen' ? '선생님이 다시 열어 준 차시' : '풀던 차시');
+    var btn = x.status === 'done' ? '<span class="tag">다 풀었어요</span>' :
+      '<button class="pbtn g" data-id="' + esc(x.id) + '"><i class="ti ti-player-play" aria-hidden="true"></i> ' + (x.status === 'doing' ? '이어서 풀기' : '시작하기') + '</button>';
+    html += '<div class="card wood"><div><div class="muted">' + tag + (x.unit ? ' · ' + esc(x.unit) : '') + '</div><div style="font-size:17px;font-weight:600">' + esc(x.title) + '</div></div>' + btn + '</div>';
+  });
+  html += '<div class="card wood muted" style="display:block">10문제 · 1~4번 기초 · 5~7번 기본 · 8~10번은 기본과 사고력 중에 골라요. 틀리면 힌트를 보고 ' + CF.MAX_TRY + '번까지 도전할 수 있어요.</div></div>';
+  $('qbox').innerHTML = html;
+  [].forEach.call($('qbox').querySelectorAll('button[data-id]'), function (b) {
+    b.onclick = function () { b.disabled = true; startQuiz(b.getAttribute('data-id')); };
+  });
+}
+
+function startQuiz(id) {
+  srv('api_startQuiz', id).then(function (r) { QV = r.view; renderQ(); }).catch(function () { openQuizMenu(); });
+}
+
+function progHtml(v) {
+  var h = '<div class="prog">';
+  for (var i = 0; i < 10; i++) {
+    if (i === 4 || i === 7) h += '<span class="sep"></span>';
+    var r = v.res[i], cls = r === 1 ? 'ok' : (r === 0 ? 'no' : '');
+    if (i === v.idx && v.step === 'q') cls += ' cur';
+    h += '<span class="d ' + cls + '">' + (r === 1 ? '<i class="ti ti-check"></i>' : r === 0 ? '<i class="ti ti-x"></i>' : (i + 1)) + '</span>';
+  }
+  var n = CF.ZONE_NEED;
+  h += '</div><div class="zones"><span>1~4번 중 ' + n + '문제 맞히면 기초 동물</span><span>5~7번 중 ' + n + '문제 맞히면 기본 동물</span><span>' +
+    (v.choice === 'adv' ? '8~10번 사고력: 맞힐 때마다 동물' : v.choice === 'basic' ? '8~10번 기본: ' + n + '문제 맞히면 기본 동물' : '8~10번: 기본 또는 사고력') + '</span></div>';
+  return h;
+}
+function qHead(v) {
+  return '<div class="qhead"><div><div class="u">' + esc(v.unit) + '</div><div class="t">' + esc(v.title) + '</div></div>' +
+    '<button class="pbtn w sm" onclick="closeQuiz()"><i class="ti ti-arrow-left" aria-hidden="true"></i> 잠깐 농장으로</button></div>' + progHtml(v);
+}
+
+function renderQ() {
+  var v = QV; if (!v) return;
+  qChoice = '';
+  if (v.step === 'choose') return renderChoose();
+  if (v.step === 'offer') return renderOffer();
+  var q = v.q, lvc = q.lv === '기초' ? 'l1' : (q.lv === '기본' ? 'l2' : 'l3');
+  var long = String(q.text).length > 30 ? ' long' : '';
+  var html = qHead(v) + '<div class="wood qcard"><span class="qlv ' + lvc + '">' + q.no + '번 · ' + esc(q.lv) + '</span>' +
+    '<div class="qtext' + long + '">' + esc(q.text) + '</div>';
+  if (q.choices && q.choices.length) {
+    html += '<div class="chs" id="chs">' + q.choices.map(function (c, i) { return '<button class="pbtn w" data-c="' + i + '">' + esc(c) + '</button>'; }).join('') + '</div>' +
+      '<div style="margin-top:12px"><button class="pbtn g lg" id="qsub"><i class="ti ti-send" aria-hidden="true"></i> 제출</button></div>';
+  } else {
+    html += '<div class="ans"><input id="qin" autocomplete="off" ' + (q.num ? 'inputmode="decimal"' : '') + ' placeholder="답"><button class="pbtn g lg" id="qsub"><i class="ti ti-send" aria-hidden="true"></i> 제출</button></div>';
+  }
+  html += '<div class="fb" id="qfb">' + (v.tries ? '다시 도전해요! (남은 기회 ' + (v.maxTry - v.tries) + '번)' : '') + '</div>' +
+    (v.hint ? '<div class="hintbox"><i class="ti ti-bulb" aria-hidden="true"></i> 힌트: ' + esc(v.hint) + '</div>' : '') + '</div>';
+  $('qbox').innerHTML = html;
+  if (q.choices && q.choices.length) {
+    [].forEach.call($('chs').querySelectorAll('button'), function (b) {
+      b.onclick = function () { [].forEach.call($('chs').querySelectorAll('button'), function (x) { x.classList.remove('sel'); }); b.classList.add('sel'); qChoice = q.choices[+b.getAttribute('data-c')]; };
+    });
+  } else {
+    var inp = $('qin'); setTimeout(function () { inp.focus(); }, 50);
+    inp.onkeydown = function (e) { if (e.key === 'Enter') submitQ(); };
+  }
+  $('qsub').onclick = submitQ;
+}
+
+function submitQ() {
+  if (qBusy) return;
+  var ans = $('qin') ? $('qin').value : qChoice;
+  if (!String(ans).trim()) { $('qfb').className = 'fb bad'; $('qfb').textContent = '답을 입력해 주세요.'; return; }
+  qBusy = true; $('qsub').disabled = true;
+  srv('api_submit', ans).then(function (r) {
+    qBusy = false;
+    var fb = $('qfb');
+    if (r.ok) {
+      fb.className = 'fb good'; fb.innerHTML = '<i class="ti ti-circle-check" aria-hidden="true"></i> 정답이에요!';
+      setTimeout(function () { afterSubmit(r); }, 800);
+    } else if (r.reveal !== undefined) {
+      fb.className = 'fb bad';
+      fb.innerHTML = '아쉬워요. 정답은 <b>' + esc(r.reveal) + '</b> 이에요. <button class="pbtn sm" id="qnext">다음으로 <i class="ti ti-arrow-right" aria-hidden="true"></i></button>';
+      $('qnext').onclick = function () { afterSubmit(r); };
+    } else {
+      QV = r.view; renderQ();
+      $('qfb').className = 'fb bad';
+      $('qfb').textContent = '다시 생각해 봐요. 남은 기회 ' + r.left + '번';
+      if ($('qin')) { $('qin').value = ''; }
+    }
+  }).catch(function () { qBusy = false; if ($('qsub')) $('qsub').disabled = false; });
+}
+
+function afterSubmit(r) {
+  if (r.farm) { applyFarm(r.farm); }
+  if (r.menu) { QUIZ = r.menu; updateBadge(); }
+  if (r.result) { showResult(r.result); return; }
+  QV = r.view; renderQ();
+}
+
+function renderChoose() {
+  $('qbox').innerHTML = qHead(QV) + '<div class="wood qcard"><div style="font-size:20px;font-weight:700;margin-bottom:4px">8~10번 문제를 골라요</div>' +
+    '<div class="muted">한 번 고르면 8~10번을 같은 종류로 풀어요.</div><div class="choose">' +
+    '<div class="wood opt" id="cBasic"><h4><i class="ti ti-leaf" aria-hidden="true"></i> 기본 문제</h4><p>지금까지 배운 내용을 한 번 더 연습해요.<br>3문제 중 <b>' + CF.ZONE_NEED + '문제를 맞히면</b> 기본 동물 1마리를 만나요.</p></div>' +
+    '<div class="wood opt" id="cAdv"><h4><i class="ti ti-flame" aria-hidden="true"></i> 사고력 문제</h4><p>조금 더 생각해야 하는 문제예요.<br><b>맞힐 때마다</b> 동물 1마리! 황금 동물이나 전설의 동물이 나타날 수도 있어요. 틀린 문제는 동물이 없어요.</p></div>' +
+    '</div></div>';
+  function go(c) { srv('api_chooseLevel', c).then(function (r) { QV = r.view; renderQ(); }).catch(function () {}); }
+  $('cBasic').onclick = function () { go('basic'); };
+  $('cAdv').onclick = function () { go('adv'); };
+}
+
+function renderOffer() {
+  var o = QV.offer;
+  var big = o.kind === 'l' || o.kind === 'g';
+  var html = qHead(QV) + '<div class="wood qcard offer"><div class="why">' + (big ? '<i class="ti ti-sparkles" aria-hidden="true"></i> ' : '') + esc(o.why) + '</div>' +
+    '<div class="muted">두 마리 중에 함께 살 동물을 한 마리 골라요' + (o.room ? '' : ' · 농장이 꽉 차서 보관함으로 가요') + '</div><div class="cands" id="cands"></div></div>';
+  $('qbox').innerHTML = html;
+  o.cands.forEach(function (t) {
+    var rr = rarity(t), d = document.createElement('div'); d.className = 'wood cand';
+    d.appendChild(animalIcon(t, false, 120));
+    d.insertAdjacentHTML('beforeend', '<div class="n">' + esc(nm(t)) + '</div><span class="tag ' + rr[0] + '">' + rr[1] + '</span>');
+    d.onclick = function () {
+      if (qBusy) return; qBusy = true;
+      srv('api_pickAnimal', t).then(function (r) {
+        qBusy = false;
+        applyFarm(r.farm);
+        if (r.menu) { QUIZ = r.menu; updateBadge(); }
+        toast(nm(t) + iga(nm(t)) + (r.where === 'farm' ? ' 농장에 왔어요!' : ' 보관함으로 갔어요 (농장이 꽉 찼어요)'));
+        if (r.result) { showResult(r.result); return; }
+        QV = r.view; renderQ();
+      }).catch(function () { qBusy = false; });
+    };
+    $('cands').appendChild(d);
+  });
+}
+
+function showResult(res) {
+  QV = null;
+  var html = '<div class="qhead"><div class="t">' + esc(res.title) + '</div><span></span></div><div class="wood qcard done">' +
+    '<div style="font-size:40px;color:#e0a800"><i class="ti ti-trophy" aria-hidden="true"></i></div>' +
+    '<div class="big">10문제 완료!</div><div style="font-size:16px">맞힌 문제 <b>' + res.correct + '</b>개 · 한 번에 맞힌 문제 <b>' + res.first + '</b>개</div>';
+  if (res.got.length) html += '<div class="gh">오늘 만난 동물</div><div class="got" id="gotBox"></div>';
+  else html += '<div class="muted" style="margin-top:10px">이번에는 동물을 만나지 못했어요. 다음 시간에 다시 도전해요!</div>';
+  if (res.xp) html += '<div style="margin-top:8px">농장 경험치 +1차시</div>';
+  if (res.levelUp) html += '<div class="lvup"><i class="ti ti-arrow-big-up-lines" aria-hidden="true"></i> 농장 레벨 ' + res.levelUp + ' 달성!</div>';
+  html += '<div style="margin-top:14px"><button class="pbtn g lg" onclick="closeQuiz()"><i class="ti ti-home" aria-hidden="true"></i> 내 농장으로</button></div></div>';
+  $('qbox').innerHTML = html;
+  if (res.got.length) res.got.forEach(function (t) {
+    var d = document.createElement('div'); d.className = 'item'; d.appendChild(animalIcon(t, false, 64));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(nm(t)) + '</div>');
+    $('gotBox').appendChild(d);
+  });
+}
+</script>

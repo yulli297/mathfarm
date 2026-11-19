@@ -1,0 +1,187 @@
+<script>
+/* 수학 농장 · 교사 화면 */
+var TD = null, tTab = 'lesson', tLesson = '', tConceptLesson = '';
+
+function openTeacher() {
+  $('teacher').classList.add('show');
+  $('farmView').classList.add('hide');
+  if (!TD) $('tbox').innerHTML = '<div class="muted" style="padding:30px;text-align:center">불러오는 중…</div>';
+  srv('api_teacherData').then(function (d) { TD = d; renderTeacher(); }).catch(function (e) {
+    $('tbox').innerHTML = '<div class="card wood">' + esc(e.message).replace(/\n/g, '<br>') + '</div>';
+  });
+}
+function closeTeacher() {
+  $('teacher').classList.remove('show');
+  enterFarm();
+}
+
+function renderTeacher() {
+  var d = TD, open = d.lessons.filter(function (l) { return l.id === d.open; })[0];
+  if (!tLesson) tLesson = d.open || (d.lessons[0] && d.lessons[0].id) || '';
+  var tabs = [['lesson', 'ti-calendar', '수업 설정'], ['students', 'ti-users', '학생 현황'], ['acc', 'ti-table', '차시별 정답률'], ['concept', 'ti-chart-bar', '개념별 정답률'], ['tools', 'ti-tool', '체험 도구']];
+  var html = '<div class="thead"><h2><i class="ti ti-school" aria-hidden="true"></i> 선생님 화면</h2>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="muted">오늘 열린 차시: <b>' + (open ? esc(open.title) : '없음') + '</b></span>' +
+    '<button class="pbtn w" onclick="openTeacher()"><i class="ti ti-refresh" aria-hidden="true"></i> 새로고침</button>' +
+    '<button class="pbtn g" onclick="closeTeacher()"><i class="ti ti-plant" aria-hidden="true"></i> 학생 화면 체험 (내 농장)</button></div></div>' +
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="pbtn w' + (tTab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '"><i class="ti ' + t[1] + '" aria-hidden="true"></i> ' + t[2] + '</button>'; }).join('') + '</div><div id="tbody"></div>';
+  $('tbox').innerHTML = html;
+  [].forEach.call($('tbox').querySelectorAll('[data-tab]'), function (b) { b.onclick = function () { tTab = b.getAttribute('data-tab'); renderTeacher(); }; });
+  ({ lesson: tLessonTab, students: tStudentsTab, acc: tAccTab, concept: tConceptTab, tools: tToolsTab })[tTab]();
+}
+
+function lessonSelect(id, val, withAll) {
+  return '<select class="tsel" id="' + id + '">' + (withAll ? '<option value="">전체 차시</option>' : '') +
+    TD.lessons.map(function (l) { return '<option value="' + esc(l.id) + '"' + (l.id === val ? ' selected' : '') + '>' + esc(l.title) + (l.unit ? ' (' + esc(l.unit) + ')' : '') + '</option>'; }).join('') + '</select>';
+}
+
+/* ---------- 수업 설정 ---------- */
+function tLessonTab() {
+  var d = TD, b = $('tbody');
+  var html = '<div class="card wood"><div style="font-weight:600;margin-bottom:6px">오늘 학생들이 풀 차시</div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' + lessonSelect('openSel', d.open) +
+    '<button class="pbtn g" id="openSave"><i class="ti ti-check" aria-hidden="true"></i> 이 차시 열기</button>' +
+    '<button class="pbtn w" id="openNone">닫기 (문제 없음)</button></div>' +
+    '<div class="muted" style="margin-top:6px">한 학생은 같은 차시를 한 번만 풀 수 있어요. 열려 있는 차시를 처음 풀 때만 농장 경험치를 받아요.</div></div>' +
+    '<div class="card wood"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px"><b>문제 미리보기</b>' + lessonSelect('prevSel', tLesson) + '</div><div class="qprev" id="qprev"></div></div>';
+  b.innerHTML = html;
+  $('openSave').onclick = function () { srv('api_setOpenLesson', $('openSel').value).then(function (r) { TD = r; toast('차시를 열었어요'); renderTeacher(); }).catch(function () {}); };
+  $('openNone').onclick = function () { srv('api_setOpenLesson', '').then(function (r) { TD = r; toast('열린 차시를 닫았어요'); renderTeacher(); }).catch(function () {}); };
+  $('prevSel').onchange = function () { tLesson = this.value; renderPreview(); };
+  renderPreview();
+}
+function renderPreview() {
+  var L = TD.lessons.filter(function (l) { return l.id === tLesson; })[0]; if (!L) { $('qprev').innerHTML = ''; return; }
+  $('qprev').innerHTML = L.q.map(function (q) {
+    if (!q.basic) return '<div><span class="qn">' + q.no + '번</span><span class="tag">' + esc(q.lv) + '</span> ' + esc(q.text) + ' → <b>' + esc(q.answer) + '</b> <span class="muted">[' + esc(q.concept) + ']</span></div>';
+    return '<div><span class="qn">' + q.no + '번</span><span class="tag">기본</span> ' + esc(q.basic.text) + ' → <b>' + esc(q.basic.answer) + '</b> <span class="muted">[' + esc(q.basic.concept) + ']</span></div>' +
+      '<div><span class="qn"></span><span class="tag l">사고력</span> ' + esc(q.adv.text) + ' → <b>' + esc(q.adv.answer) + '</b> <span class="muted">[' + esc(q.adv.concept) + ']</span></div>';
+  }).join('');
+}
+
+/* ---------- 학생 현황 ---------- */
+function firstRate(email) {
+  var n = 0, f = 0;
+  Object.keys(TD.perQ).forEach(function (lid) { var m = TD.perQ[lid][email]; if (m) Object.keys(m).forEach(function (no) { n++; f += m[no].f; }); });
+  return n ? Math.round(f / n * 100) + '%' : '-';
+}
+function tStudentsTab() {
+  var rows = TD.students.map(function (s, i) {
+    if (!s.joined) return '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td><td colspan="9" class="muted">아직 접속하지 않았어요</td><td><button class="pbtn sm w" data-re="' + i + '">차시 열기</button></td></tr>';
+    var cnt = 0; Object.keys(s.dex).forEach(function (t) { cnt += s.dex[t]; });
+    var kinds = Object.keys(s.dex).length;
+    var doneN = Object.keys(s.done).length;
+    return '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td><td class="l">' + esc(s.farmName) + '</td><td>Lv.' + s.level + '</td><td>' + doneN + '</td>' +
+      '<td><span class="coin"></span> ' + fmt(s.gold) + ' <button class="pbtn sm w" data-gold="' + i + '">수정</button></td>' +
+      '<td>' + s.onFarm + ' / ' + s.inStore + '</td><td>' + kinds + ' / ' + allKinds() + ' <button class="pbtn sm w" data-dex="' + i + '">보기</button></td>' +
+      '<td>' + firstRate(s.email) + '</td><td>' + (s.doing ? esc(titleOf(s.doing)) : '') + '</td><td>' + s.pity + '</td>' +
+      '<td><button class="pbtn sm w" data-re="' + i + '">차시 열기' + (s.reopened.length ? ' (' + s.reopened.length + ')' : '') + '</button></td></tr>';
+  }).join('');
+  $('tbody').innerHTML = '<div class="legend">정답률은 한 번에 맞힌 비율이에요. 동물 수는 농장 / 보관함. 전설 카운트는 사고력 뽑기 횟수(' + TD.pity + '번째에 전설 확정, 전설을 받으면 0부터)예요.</div>' +
+    '<div class="tscroll"><table class="tbl"><thead><tr><th>번호</th><th>이름</th><th>농장 이름</th><th>레벨</th><th>푼 차시</th><th>골드</th><th>동물 수</th><th>도감</th><th>정답률</th><th>풀고 있는 차시</th><th>전설 카운트</th><th>결석 보충</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  [].forEach.call($('tbody').querySelectorAll('[data-gold]'), function (b) { b.onclick = function () { goldModal(TD.students[+b.getAttribute('data-gold')]); }; });
+  [].forEach.call($('tbody').querySelectorAll('[data-dex]'), function (b) { b.onclick = function () { var s = TD.students[+b.getAttribute('data-dex')]; openModal(head('ti-book', esc(s.name) + ' 도감') + '<div id="dexBox"></div>'); dexHtmlInto($('dexBox'), s.dex); }; });
+  [].forEach.call($('tbody').querySelectorAll('[data-re]'), function (b) { b.onclick = function () { reopenModal(TD.students[+b.getAttribute('data-re')]); }; });
+}
+function allKinds() { var n = 0; Object.keys(CF.ANIMALS).forEach(function (k) { n += CF.ANIMALS[k].length; }); return n; }
+function titleOf(id) { var L = TD.lessons.filter(function (l) { return l.id === id; })[0]; return L ? L.title : id; }
+
+function goldModal(s) {
+  openModal(head('ti-coin', esc(s.name) + ' 골드 바꾸기') + '<div style="display:flex;gap:6px;align-items:center"><input id="gIn" type="number" min="0" value="' + s.gold + '" style="font-size:16px;padding:6px 8px;width:160px;border:2px solid #c9a46a;border-radius:6px">' +
+    '<button class="pbtn g" id="gOk">저장</button></div><div class="muted" style="margin-top:6px">지금 ' + fmt(s.gold) + ' 골드</div><div class="err" id="gErr"></div>');
+  $('gOk').onclick = function () {
+    srv('api_setGold', s.email, $('gIn').value).then(function (r) { TD = r; closeModal(); toast('골드를 바꿨어요'); renderTeacher(); }).catch(function (e) { $('gErr').textContent = e.message; });
+  };
+}
+function reopenModal(s) {
+  var rows = TD.lessons.map(function (l) {
+    var done = s.done && s.done[l.id], on = s.reopened && s.reopened.indexOf(l.id) >= 0;
+    var st = on ? '<span class="tag s">열려 있음</span>' : (done ? '<span class="tag">풀었음 (' + done.correct + '/10)</span>' : '<span class="tag">안 풀었음</span>');
+    return '<tr><td class="l">' + esc(l.title) + '</td><td>' + st + '</td><td>' + (on ? '<button class="pbtn sm red" data-off="' + esc(l.id) + '">닫기</button>' : '<button class="pbtn sm" data-on="' + esc(l.id) + '">열어 주기</button>') + '</td></tr>';
+  }).join('');
+  openModal(head('ti-lock-open', esc(s.name) + ' · 지난 차시 열어 주기') + '<div class="muted" style="margin-bottom:8px">결석했거나 다시 풀어야 하는 학생에게 차시를 열어 줘요. 다시 열어 준 차시는 농장 경험치를 주지 않아요. (동물은 받아요)</div>' +
+    '<table class="tbl"><thead><tr><th>차시</th><th>상태</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>');
+  function go(id, on) {
+    srv('api_reopen', s.email, id, on).then(function (r) { TD = r; var s2 = TD.students.filter(function (x) { return x.email === s.email; })[0]; reopenModal(s2); if (tTab === 'students') tStudentsTab(); }).catch(function () {});
+  }
+  [].forEach.call($('mbox').querySelectorAll('[data-on]'), function (b) { b.onclick = function () { go(b.getAttribute('data-on'), true); }; });
+  [].forEach.call($('mbox').querySelectorAll('[data-off]'), function (b) { b.onclick = function () { go(b.getAttribute('data-off'), false); }; });
+}
+
+/* ---------- 차시별 정답률 ---------- */
+function tAccTab() {
+  var L = TD.lessons.filter(function (l) { return l.id === tLesson; })[0];
+  var m = TD.perQ[tLesson] || {};
+  var head2 = '<tr><th>번호</th><th>이름</th>';
+  for (var i = 1; i <= 10; i++) head2 += '<th>' + i + '번</th>';
+  head2 += '<th>8~10번</th><th>한 번에</th><th>최종</th></tr>';
+  var colF = [], colN = [];
+  var rows = TD.students.map(function (s) {
+    var r = m[s.email], tr = '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td>';
+    if (!r) return tr + '<td colspan="13" class="muted">기록 없음</td></tr>';
+    var f = 0, ok = 0, n = 0, lv = '';
+    for (var i = 1; i <= 10; i++) {
+      var c = r[i];
+      if (!c) { tr += '<td>·</td>'; continue; }
+      n++; f += c.f; ok += c.ok;
+      colF[i] = (colF[i] || 0) + c.f; colN[i] = (colN[i] || 0) + 1;
+      if (i >= 8) lv = c.lv;
+      tr += c.f ? '<td class="cO">O</td>' : (c.ok ? '<td class="cR" title="' + c.t + '번 만에 맞힘">△</td>' : '<td class="cX">X</td>');
+    }
+    return tr + '<td>' + esc(lv) + '</td><td>' + (n ? Math.round(f / n * 100) + '%' : '-') + '</td><td>' + (n ? Math.round(ok / n * 100) + '%' : '-') + '</td></tr>';
+  }).join('');
+  var foot = '<tr><th colspan="2">반 전체 (한 번에)</th>';
+  for (var j = 1; j <= 10; j++) foot += '<th>' + (colN[j] ? Math.round(colF[j] / colN[j] * 100) + '%' : '-') + '</th>';
+  foot += '<th colspan="3"></th></tr>';
+  $('tbody').innerHTML = '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">' + lessonSelect('accSel', tLesson) + '</div>' +
+    '<div class="legend">O 한 번에 맞힘 · △ 힌트 보고 맞힘 · X 끝내 틀림 · 8~10번은 학생마다 기본/사고력 문제가 달라요</div>' +
+    '<div class="tscroll"><table class="tbl"><thead>' + head2 + '</thead><tbody>' + rows + '</tbody><tfoot>' + foot + '</tfoot></table></div>';
+  $('accSel').onchange = function () { tLesson = this.value; tAccTab(); };
+}
+
+/* ---------- 개념별 정답률 ---------- */
+function tConceptTab() {
+  var agg = {}, order = [];
+  Object.keys(TD.perQ).forEach(function (lid) {
+    if (tConceptLesson && lid !== tConceptLesson) return;
+    var m = TD.perQ[lid];
+    Object.keys(m).forEach(function (email) {
+      Object.keys(m[email]).forEach(function (no) {
+        var c = m[email][no], key = c.c || '(개념 없음)';
+        if (!agg[key]) { agg[key] = { n: 0, f: 0, ok: 0 }; order.push(key); }
+        agg[key].n++; agg[key].f += c.f; agg[key].ok += c.ok;
+      });
+    });
+  });
+  order.sort(function (a, b) { return agg[a].f / agg[a].n - agg[b].f / agg[b].n; });
+  var html = '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">' + lessonSelect('conSel', tConceptLesson, true) + '</div>' +
+    '<div class="legend">막대는 한 번에 맞힌 비율, 오른쪽은 (힌트 보고 맞힌 것까지 포함한 최종 정답률). 낮은 개념이 위에 와요.</div><div class="card wood bars">';
+  if (!order.length) html += '<div class="muted">아직 풀이 기록이 없어요.</div>';
+  order.forEach(function (k) {
+    var a = agg[k], p = Math.round(a.f / a.n * 100), q = Math.round(a.ok / a.n * 100);
+    html += '<div class="r"><div>' + esc(k) + ' <span class="muted">(' + a.n + '문항)</span></div><div class="b"><i class="' + (p >= 80 ? '' : p >= 60 ? 'mid' : 'low') + '" style="width:' + p + '%"></i></div><div><b>' + p + '%</b> <span class="muted">(' + q + '%)</span></div></div>';
+  });
+  $('tbody').innerHTML = html + '</div>';
+  $('conSel').onchange = function () { tConceptLesson = this.value; tConceptTab(); };
+}
+
+/* ---------- 체험 도구 ---------- */
+function tToolsTab() {
+  $('tbody').innerHTML = '<div class="card wood"><div style="font-weight:600;margin-bottom:6px">선생님 농장으로 학생 화면 체험하기</div>' +
+    '<div class="muted" style="margin-bottom:8px">아래 도구는 <b>선생님 본인 농장</b>에만 적용돼요. 선생님 풀이 기록은 정답률 통계에 들어가지 않아요.</div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+    '<button class="pbtn" data-tool="redo"><i class="ti ti-rotate" aria-hidden="true"></i> 푼 차시 기록 지우기 (다시 풀기)</button>' +
+    '<button class="pbtn" data-tool="refill"><i class="ti ti-coin" aria-hidden="true"></i> 동물 동전 다시 채우기</button>' +
+    '<button class="pbtn" data-tool="gold"><i class="ti ti-plus" aria-hidden="true"></i> 골드 +10,000</button>' +
+    '<button class="pbtn red" data-tool="reset"><i class="ti ti-trash" aria-hidden="true"></i> 내 농장 처음부터</button></div></div>';
+  [].forEach.call($('tbody').querySelectorAll('[data-tool]'), function (b) {
+    b.onclick = function () {
+      var k = b.getAttribute('data-tool');
+      srv('api_teacherTool', k).then(function (r) {
+        applyFarm(r.farm); QUIZ = r.quiz; updateBadge();
+        if (k === 'reset') { A = []; applyFarm(r.farm); }
+        toast({ redo: '푼 차시 기록을 지웠어요', refill: '동전을 다시 채웠어요', gold: '골드 10,000을 넣었어요', reset: '농장을 처음 상태로 돌렸어요' }[k]);
+      }).catch(function () {});
+    };
+  });
+}
+</script>

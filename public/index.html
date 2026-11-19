@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<?!= include('css') ?>
+</head>
+<body>
+
+<!-- 농장 -->
+<div id="farmView" class="hide">
+  <canvas id="farm" width="336" height="210"></canvas>
+  <div id="hud" class="wood" title="눌러서 농장 이름 바꾸기">
+    <div class="nm"><span id="fname"></span><span class="lv" id="flv"></span><i class="ti ti-pencil" aria-hidden="true" style="font-size:13px;color:#7a5a3a"></i></div>
+    <div class="bar"><i id="fexp" style="width:0%"></i></div>
+    <div class="row"><span><i class="ti ti-paw" aria-hidden="true"></i> <span id="fcnt"></span></span><span id="gwrap"><span class="coin"></span><span id="fgold"></span></span></div>
+    <div class="sub" id="fnext"></div>
+  </div>
+  <div id="banner" class="wood"></div>
+  <div id="topR">
+    <button id="zoomBtn" class="pbtn w"><i class="ti ti-zoom-out" aria-hidden="true"></i> 전체 보기</button>
+  </div>
+  <div id="botL">
+    <button id="teacherBtn" class="pbtn w hide"><i class="ti ti-school" aria-hidden="true"></i> 선생님 화면</button>
+  </div>
+  <div id="menu" class="wood">
+    <button class="pbtn" id="mQuiz"><i class="ti ti-pencil" aria-hidden="true"></i> 문제 풀기</button>
+    <button class="pbtn" id="mShop"><i class="ti ti-building-store" aria-hidden="true"></i> 상점</button>
+    <button class="pbtn" id="mDex"><i class="ti ti-book" aria-hidden="true"></i> 도감</button>
+    <button class="pbtn" id="mStore"><i class="ti ti-box" aria-hidden="true"></i> 보관함</button>
+    <button class="pbtn wide up" id="mUp"><i class="ti ti-hammer" aria-hidden="true"></i> 건물 업그레이드</button>
+  </div>
+  <div id="act" class="wood">
+    <button class="pbtn red sm" id="aSell"></button>
+    <button class="pbtn sm" id="aStore"><i class="ti ti-box" aria-hidden="true"></i> 보관</button>
+    <button class="pbtn sm" id="aRot"><i class="ti ti-rotate-clockwise" aria-hidden="true"></i> 회전</button>
+  </div>
+  <button id="editBtn" class="pbtn w"><i class="ti ti-arrows-move" aria-hidden="true"></i> 배치 조정</button>
+  <div id="qbadge" class="wood hide"><i class="ti ti-pencil" aria-hidden="true"></i> 오늘의 문제</div>
+  <div id="bub"></div>
+</div>
+
+<!-- 창 -->
+<div id="modal"><div class="box wood" id="mbox"></div></div>
+
+<!-- 처음 안내 / 오류 -->
+<div id="full" class="full hide"><div class="card2 wood" id="fullBox"></div></div>
+
+<!-- 문제 화면 -->
+<div id="quiz"><div class="qwrap" id="qbox"></div></div>
+
+<!-- 교사 화면 -->
+<div id="teacher"><div class="twrap" id="tbox"></div></div>
+
+<div id="toast"></div>
+<div id="busy" class="wood"><i class="ti ti-loader-2" aria-hidden="true"></i> 저장 중…</div>
+
+<script>
+var BOOT = <?!= bootJson ?>;
+</script>
+<?!= include('sprites') ?>
+<?!= include('app') ?>
+<?!= include('farm') ?>
+<?!= include('quiz') ?>
+<?!= include('teacher') ?>
+<?!= include('extras') ?>
+<script>start();</script>
+</body>
+</html>

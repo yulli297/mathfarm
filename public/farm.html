@@ -1,0 +1,530 @@
+<script>
+/* 수학 농장 · 농장 화면 (돌아다니는 동물, 동전, 배치, 상점, 도감, 보관함, 업그레이드)
+ * 2026-11-19 동물 위치 기억(농장 고정) 포함 */
+var cv = $('farm'), ctx = cv.getContext('2d');
+var VW = 336, VH = 210, DV = 336, MAXV = 512, wide = false;
+var state = null, OBJ = [], A = [], STORE = { animals: [], items: [] }, TODAY = '';
+var cam = { x: 0, y: 0 }, mode = 'play', drag = null, sel = null, selA = null, last = performance.now(), hoverCoin = null, flash = 0;
+var ptrs = {}, pinch = null, menuObj = null, pendingCollect = 0, started = false;
+
+function applyCfg() {
+  CF.BARN.forEach(function (b, i) { if (BARN[i]) { BARN[i].cap = b.cap; BARN[i].cost = b.cost; BARN[i].name = b.name; } });
+  Object.keys(CF.ITEMS).forEach(function (k) { if (ITEMS[k]) { ITEMS[k].price = CF.ITEMS[k].price; ITEMS[k].name = CF.ITEMS[k].name; } });
+  Object.keys(CF.NAMES).forEach(function (t) { if (TYPES[t]) TYPES[t][3] = CF.NAMES[t]; });
+  PAY = CF.PAY; LAND = CF.LAND;
+}
+
+function own() { var l = LAND[state.barn]; return { x: Math.round((WW - l[0]) / 2), y: Math.round((WH - l[1]) / 2), w: l[0], h: l[1] }; }
+function cap() { return BARN[state.barn].cap; }
+
+/* ---------- 서버 데이터 → 화면 ---------- */
+function initFarm(f) {
+  applyFarm(f);
+  centerOn(WW / 2, WH / 2);
+  if (!started) { started = true; requestAnimationFrame(draw); }
+}
+function applyFarm(f) {
+  var old = {}; A.forEach(function (a) { old[a.id] = a; });
+  var selId = sel && sel.id;
+  state = f; TODAY = f.today; OBJ = f.objs; STORE = f.storage;
+  A = f.animals.map(function (d) {
+    var a = old[d.id];
+    if (a) { a.t = d.t; a.ready = d.c !== TODAY; return a; }
+    var s = savedSpot(d), n = mkAnimal(d.t, s[0], s[1]);
+    n.id = d.id; n.ready = d.c !== TODAY;
+    if (s[2] != null) n.f = !!s[2];
+    return n;
+  });
+  sel = null; selA = null;
+  if (selId) OBJ.forEach(function (o) { if (o.id === selId) sel = o; });
+  hud();
+  updateBadge();
+}
+function hud() {
+  $('fname').textContent = state.name;
+  $('flv').textContent = 'Lv.' + state.level;
+  $('fgold').textContent = fmt(state.gold);
+  $('fcnt').textContent = A.length + ' / ' + cap();
+  $('fexp').style.width = state.maxLevel ? '100%' : Math.round((state.need - state.toNext) / state.need * 100) + '%';
+  $('fnext').textContent = state.maxLevel ? '최고 레벨이에요!' : '다음 레벨까지 ' + state.toNext + '차시';
+}
+function animalPos() { return A.map(function (a) { var c = ctr(a); return { id: a.id, a: 1, x: Math.round(c[0]), y: Math.round(c[1]), f: a.f ? 1 : 0 }; }); }
+function layoutList() { return OBJ.map(function (o) { return { id: o.id, k: o.k, x: Math.round(o.x), y: Math.round(o.y) }; }).concat(animalPos()); }
+
+/* ---------- 동물 위치 기억 (나갔다 들어와도 그 자리에) ---------- */
+var POS_KEY = 'mf_pos', POS = (function () { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}') || {}; } catch (e) { return {}; } })();
+function savePos() {
+  if (!state || !A.length) return;
+  var now = Date.now();
+  A.forEach(function (a) { var c = ctr(a); POS[a.id] = [Math.round(c[0]), Math.round(c[1]), a.f ? 1 : 0, now]; });
+  try { localStorage.setItem(POS_KEY, JSON.stringify(POS)); } catch (e) {}
+}
+function savedSpot(d) {
+  var l = POS[d.id], s = d.p;
+  var p = l && (!s || (l[3] || 0) >= (s[3] || 0)) ? l : s;   // 기기 기록과 서버 기록 중 최근 것
+  if (!p) return freeSpot();
+  return nearSpot(p[0], p[1]).concat([p[2]]);
+}
+function nearSpot(cx, fy) {
+  if (!solidAt(cx, fy)) return [cx, fy];
+  for (var r = 4; r <= 120; r += 4) for (var k = 0; k < 16; k++) {
+    var an = k / 16 * Math.PI * 2, x = cx + Math.cos(an) * r, y = fy + Math.sin(an) * r * .7;
+    if (!solidAt(x, y)) return [x, y];
+  }
+  return freeSpot();
+}
+setInterval(savePos, 3000);
+document.addEventListener('visibilitychange', function () { if (document.hidden) savePos(); });
+window.addEventListener('pagehide', savePos);
+
+/* ---------- 충돌 · 이동 ---------- */
+function solidAt(cx, fy, ign) {
+  var o = own(); if (cx < o.x + 7 || cx > o.x + o.w - 7 || fy < o.y + 10 || fy > o.y + o.h - 2) return true;
+  var bx = cx - 5, by = fy - 3, bw = 10, bh = 4;
+  for (var i = 0; i < OBJ.length; i++) {
+    var ob = OBJ[i]; if (ob === ign) continue;
+    var d = def(ob), F2 = fps(d);
+    for (var j = 0; j < F2.length; j++) { var f = F2[j], rx = ob.x + f[0], ry = ob.y + f[1]; if (bx < rx + f[2] && bx + bw > rx && by < ry + f[3] && by + bh > ry) return true; }
+  }
+  if (typeof gardenSolid === 'function' && gardenSolid(bx, by, bw, bh)) return true;   // 텃밭 (extras)
+  return false;
+}
+function pathClear(x0, y0, x1, y1) { var n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 3); for (var i = 1; i <= n; i++) if (solidAt(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n)) return false; return true; }
+function mkAnimal(t, cx, fy) { var m = sprite(t, false).meta; return { t: t, f: Math.random() < .5, j: 0, dy: 0, ready: true, state: 'idle', until: performance.now() + Math.random() * 2500, x: Math.round(cx - m.W / 2), y: Math.round(fy - m.foot) }; }
+function freeSpot(nx, ny) {
+  var o = own();
+  for (var i = 0; i < 80; i++) {
+    var cx = (nx != null ? nx + (Math.random() - .5) * 160 : o.x + 20 + Math.random() * (o.w - 40)), fy = (ny != null ? ny + (Math.random() - .5) * 100 : o.y + 30 + Math.random() * (o.h - 40));
+    if (!solidAt(cx, fy)) return [cx, fy];
+  }
+  return [o.x + o.w / 2, o.y + o.h - 20];
+}
+function ctr(a) { var m = sprite(a.t, false).meta; return [a.x + m.W / 2, a.y + m.foot]; }
+function randTarget(a) { var m = sprite(a.t, false).meta, c = ctr(a); for (var i = 0; i < 25; i++) { var cx = c[0] + (Math.random() - .5) * 110, fy = c[1] + (Math.random() - .5) * 70; if (!solidAt(cx, fy) && pathClear(c[0], c[1], cx, fy)) return { x: Math.round(cx - m.W / 2), y: Math.round(fy - m.foot) }; } return null; }
+function foot(a) { return a.y + sprite(a.t, a.f).meta.foot; }
+function ofoot(o) { return o.y + def(o).h - 2; }
+function step(a, now, dt) {
+  if (mode === 'edit' || (drag && drag.a === a)) return;
+  var m = sprite(a.t, a.f).meta;
+  if (a.state === 'idle') { if (now > a.until) { var t = randTarget(a); if (t) { a.tx = t.x; a.ty = t.y; a.state = 'walk'; a.f = t.x < a.x; } else a.until = now + 700; } return; }
+  var dx = a.tx - a.x, dy = a.ty - a.y, d = Math.hypot(dx, dy), v = m.sp * dt;
+  if (d <= v) { a.x = a.tx; a.y = a.ty; a.state = 'idle'; a.until = now + 1500 + Math.random() * 4500; return; }
+  var nx = a.x + dx / d * v, ny = a.y + dy / d * v, c = ctr(a), inside = solidAt(c[0], c[1]);
+  if (!inside && solidAt(nx + m.W / 2, ny + m.foot)) { a.state = 'idle'; a.until = now + 500; return; }
+  a.x = nx; a.y = ny;
+}
+
+/* ---------- 카메라 · 확대 축소 ---------- */
+function clampCam() {
+  var o = own(), m = 18;
+  function cl(v, a, b) { return a > b ? (a + b) / 2 : Math.max(a, Math.min(b, v)); }
+  cam.x = cl(cam.x, o.x - m, o.x + o.w + m - VW); cam.y = cl(cam.y, o.y - m - 14, o.y + o.h + m - VH);
+  cam.x = Math.max(0, Math.min(WW - VW, cam.x)); cam.y = Math.max(0, Math.min(WH - VH, cam.y));
+}
+function centerOn(x, y) { cam.x = x - VW / 2; cam.y = y - VH / 2; clampCam(); }
+function aspect() { var w = cv.clientWidth || window.innerWidth, h = cv.clientHeight || window.innerHeight; return h / w; }
+function fitCanvas() {
+  var asp = aspect();
+  MAXV = Math.max(160, Math.min(WW, Math.floor(WH / asp)));
+  DV = Math.min(336, MAXV);
+  setView(wide ? MAXV : DV, true);
+}
+function setView(vw, force) {
+  var asp = aspect();
+  vw = Math.max(Math.min(200, MAXV), Math.min(MAXV, vw));
+  var mx = cam.x + VW / 2, my = cam.y + VH / 2;
+  var nw = Math.round(vw), nh = Math.min(WH, Math.round(vw * asp));
+  if (force || nw !== VW || nh !== VH) {
+    VW = nw; VH = nh;
+    if (cv.width !== VW || cv.height !== VH) { cv.width = VW; cv.height = VH; ctx.imageSmoothingEnabled = false; }
+  }
+  if (state) centerOn(mx, my);
+  wide = VW > DV + 20;
+  $('zoomBtn').innerHTML = wide ? '<i class="ti ti-zoom-in" aria-hidden="true"></i> 가까이 보기' : '<i class="ti ti-zoom-out" aria-hidden="true"></i> 전체 보기';
+  $('zoomBtn').classList.toggle('on', wide);
+}
+window.addEventListener('resize', function () { if (state) fitCanvas(); });
+$('zoomBtn').onclick = function () { setView(wide ? DV : MAXV); };
+cv.addEventListener('wheel', function (e) { e.preventDefault(); setView(VW * (e.deltaY > 0 ? 1.12 : 1 / 1.12)); }, { passive: false });
+
+/* ---------- 그리기 ---------- */
+function coinPos(a, now) { var sp = sprite(a.t, a.f), m = sp.meta, bob = Math.round(Math.sin(now / 300 + a.x * .1)); return { x: Math.round(a.x + m.W / 2 - 4), y: Math.round(a.y) - a.dy + sp.top - 11 + bob }; }
+function drawCoin(x, y, hl) { R(x + 1, y + 10, 6, 1, 'rgba(30,60,15,0.25)'); E(x + 4, y + 4, 4.2, 4.2, '#6b4a00'); E(x + 4, y + 4, 3.4, 3.4, hl ? '#ffe066' : '#f5c518'); E(x + 4.5, y + 4.5, 2, 2, hl ? '#ffd23f' : '#e0b010'); R(x + 2, y + 2, 1, 2, '#fff7c0'); R(x + 3, y + 1, 1, 1, '#fff7c0'); R(x + 4, y + 3, 1, 3, '#b8860b'); R(x + 3, y + 3, 3, 1, '#b8860b'); }
+var act = $('act');
+function draw(now) {
+  var dt = Math.min(.1, (now - last) / 1000); last = now;
+  if ($('farmView').classList.contains('hide')) { requestAnimationFrame(draw); return; }
+  A.forEach(function (a) { step(a, now, dt); });
+  var cx = Math.round(cam.x), cy = Math.round(cam.y); X = ctx;
+  ctx.fillStyle = '#4f8532'; ctx.fillRect(0, 0, VW, VH); ctx.drawImage(wild, -cx, -cy);
+  ctx.save(); ctx.translate(-cx, -cy);
+  var o = own();
+  ctx.save(); ctx.beginPath(); ctx.rect(o.x, o.y, o.w, o.h); ctx.clip(); ctx.drawImage(grass, 0, 0); ctx.restore();
+  R(o.x - 1, o.y - 1, o.w + 2, 1, '#4a7a2a'); R(o.x - 1, o.y + o.h, o.w + 2, 1, '#4a7a2a'); R(o.x - 1, o.y, 1, o.h, '#4a7a2a'); R(o.x + o.w, o.y, 1, o.h, '#4a7a2a');
+  for (var x = o.x; x < o.x + o.w; x += 9) { R(x, o.y - 2, 2, 2, '#a3acb3'); R(x + 4, o.y + o.h, 2, 2, '#a3acb3'); }
+  for (var y = o.y; y < o.y + o.h; y += 9) { R(o.x - 2, y, 2, 2, '#a3acb3'); R(o.x + o.w, y + 4, 2, 2, '#a3acb3'); }
+  if (flash > now) { var al = (flash - now) / 1200; ctx.fillStyle = 'rgba(255,250,200,' + (.45 * al) + ')'; ctx.fillRect(o.x, o.y, o.w, o.h); }
+  OBJ.filter(function (b) { return def(b).flat; }).forEach(function (b) { ctx.drawImage(frame(def(b), now), Math.round(b.x), Math.round(b.y)); });
+  if (typeof drawGarden === 'function') drawGarden(now);   // 텃밭 (extras)
+  var list = [];
+  OBJ.forEach(function (b) { if (!def(b).flat) list.push({ o: b, f: ofoot(b) }); });
+  A.forEach(function (a) { list.push({ a: a, f: foot(a) }); });
+  list.sort(function (p, q) { return p.f - q.f; });
+  list.forEach(function (it) {
+    if (it.o) { ctx.drawImage(frame(def(it.o), now), Math.round(it.o.x), Math.round(it.o.y)); return; }
+    var a = it.a, sp = sprite(a.t, a.f), m = sp.meta, lift = 0, px = Math.round(a.x), py = Math.round(a.y);
+    if (a.j) { var p = (now - a.j) / 350; if (p >= 1) a.j = 0; else lift = Math.round(Math.sin(p * Math.PI) * 5); }
+    if (drag && drag.a === a && drag.moved) lift = 3;
+    var bob = (a.state === 'walk' && mode === 'play' && !m.fly && Math.floor(now / 170) % 2) ? 1 : 0;
+    a.dy = lift + (m.fly || 0) + bob;
+    E(px + m.W / 2, py + m.foot, m.rx - lift * .6, m.ry, m.fly ? 'rgba(30,60,15,0.22)' : SH);
+    ctx.drawImage(sp.c, px, py - a.dy);
+    if (mode === 'edit' && a === selA) { ctx.save(); ctx.strokeStyle = '#fff'; ctx.setLineDash([2, 2]); ctx.strokeRect(px + .5, py - a.dy + .5, m.W - 1, m.H - 1); ctx.restore(); }
+  });
+  if (mode === 'play') A.forEach(function (a) { if (a.ready) { var c = coinPos(a, now); drawCoin(c.x, c.y, a === hoverCoin); } });
+  if (mode === 'edit') {
+    OBJ.forEach(function (b) {
+      var d = def(b); ctx.save(); ctx.strokeStyle = b === sel ? '#fff' : 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+      ctx.lineDashOffset = -Math.floor(now / 120) % 4; ctx.strokeRect(Math.round(b.x) + .5, Math.round(b.y) + .5, d.w - 1, d.h - 1); ctx.restore();
+    });
+  }
+  ctx.restore();
+  placeAct();
+  if (menu.style.display === 'grid' && menuObj) placeMenu();
+  placeBadge();
+  requestAnimationFrame(draw);
+}
+function placeAct() {
+  if (mode === 'edit' && !drag && (sel && sel.k !== 'barn' || selA)) {
+    act.style.display = 'flex';
+    var bx, by, bw, bh;
+    if (sel) {
+      var d = def(sel);
+      $('aSell').style.display = d.special ? 'none' : '';
+      $('aRot').style.display = d.rot ? '' : 'none';
+      $('aSell').innerHTML = '<i class="ti ti-coin" aria-hidden="true"></i> 판매 +' + fmt(Math.floor(d.price / 2));
+      $('aStore').innerHTML = '<i class="ti ti-box" aria-hidden="true"></i> 보관';
+      bx = sel.x; by = sel.y; bw = d.w; bh = d.h;
+    } else {
+      var m = sprite(selA.t, selA.f).meta;
+      $('aSell').style.display = 'none'; $('aRot').style.display = 'none';
+      $('aStore').innerHTML = '<i class="ti ti-box" aria-hidden="true"></i> 보관함으로';
+      bx = selA.x; by = selA.y; bw = m.W; bh = m.H;
+    }
+    act.style.left = Math.min(Math.max((bx - cam.x + bw / 2) / VW * 100, 15), 85) + '%';
+    var below = by - cam.y + bh + 3;
+    act.style.top = ((below > VH - 28 ? Math.max(by - cam.y - 22, 2) : below) / VH * 100) + '%';
+  } else act.style.display = 'none';
+}
+
+/* ---------- 누르기 · 끌기 ---------- */
+function pos(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * VW / r.width + cam.x, y: (e.clientY - r.top) * VH / r.height + cam.y }; }
+function sx(x) { return (x - cam.x) / VW * 100 + '%'; }
+function sy(y) { return (y - cam.y) / VH * 100 + '%'; }
+function hitCoin(p) { if (mode !== 'play') return null; var now = performance.now(), best = null; A.forEach(function (a) { if (!a.ready) return; var c = coinPos(a, now); if (p.x >= c.x - 4 && p.x <= c.x + 12 && p.y >= c.y - 4 && p.y <= c.y + 12) best = a; }); return best; }
+function hitA(p) {
+  var list = A.slice().sort(function (a, b) { return foot(b) - foot(a); });
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i], sp = sprite(a.t, a.f), W = sp.meta.W, H = sp.meta.H, qx = Math.floor(p.x - Math.round(a.x)), qy = Math.floor(p.y - (Math.round(a.y) - a.dy));
+    if (qx >= 0 && qx < W && qy >= 0 && qy < H) for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) { var yy = qy + dy, xx = qx + dx; if (yy >= 0 && yy < H && xx >= 0 && xx < W && sp.m[yy][xx]) return a; }
+  }
+  return null;
+}
+function hitO(p) {
+  var list = OBJ.slice().sort(function (a, b) { return (def(b).flat ? 0 : 1) - (def(a).flat ? 0 : 1) || ofoot(b) - ofoot(a); });
+  for (var i = 0; i < list.length; i++) { var b = list[i], d = def(b); if (p.x >= b.x && p.x < b.x + d.w && p.y >= b.y && p.y < b.y + d.h) return b; }
+  return null;
+}
+var wrapEl = $('farmView');
+function collect(a) {
+  var amt = dailyAmount(a.t, a.id, TODAY);
+  a.ready = false; state.gold += amt; hud();
+  var gw = $('gwrap'); gw.classList.add('pop'); setTimeout(function () { gw.classList.remove('pop'); }, 150);
+  var c = coinPos(a, performance.now()), f = document.createElement('div');
+  f.className = 'flt'; f.textContent = '+' + amt; f.style.left = sx(c.x + 4); f.style.top = sy(c.y + 6); wrapEl.appendChild(f);
+  requestAnimationFrame(function () { requestAnimationFrame(function () { f.style.transform = 'translate(-50%,-220%)'; f.style.opacity = '0'; }); });
+  setTimeout(function () { f.remove(); }, 950);
+  collectQ.push({ a: a, amt: amt });
+  clearTimeout(collectT);
+  collectT = setTimeout(flushCollect, 700);
+}
+/* 여러 마리를 빠르게 누르면 모아서 한 번에 저장해요 */
+var collectQ = [], collectT = null;
+function flushCollect() {
+  var batch = collectQ; collectQ = [];
+  if (!batch.length) return;
+  pendingCollect++;
+  srv('api_collect', batch.map(function (x) { return x.a.id; }), animalPos()).then(function (r) {
+    pendingCollect--;
+    if (!pendingCollect && !collectQ.length) { state.gold = r.gold; hud(); }
+  }).catch(function () {
+    pendingCollect--;
+    batch.forEach(function (x) { x.a.ready = true; state.gold -= x.amt; });
+    hud();
+  });
+}
+
+var menu = $('menu');
+function hideMenu() { menu.style.display = 'none'; menuObj = null; }
+function placeMenu() { var d = def(menuObj); menu.style.left = Math.min(Math.max((menuObj.x - cam.x + d.w / 2) / VW * 100, 18), 82) + '%'; menu.style.top = (Math.max(8, Math.min(menuObj.y - cam.y + d.h * .45, VH - 80)) / VH * 100) + '%'; }
+function showMenu(b) { menuObj = b; menu.style.display = 'grid'; placeMenu(); }
+
+cv.addEventListener('pointerdown', function (e) {
+  var p = pos(e);
+  try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+  ptrs[e.pointerId] = { x: e.clientX, y: e.clientY };
+  if (Object.keys(ptrs).length === 2) { drag = null; var k = Object.keys(ptrs), a1 = ptrs[k[0]], b1 = ptrs[k[1]]; pinch = { d: Math.hypot(a1.x - b1.x, a1.y - b1.y) || 1, vw: VW }; return; }
+  if (pinch) return;
+  if (mode === 'edit') {
+    var b = hitO(p);
+    if (b) { sel = b; selA = null; e.preventDefault(); drag = { o: b, ox: p.x - b.x, oy: p.y - b.y }; return; }
+    var an = hitA(p);
+    if (an) { selA = an; sel = null; drag = null; return; }
+    sel = null; selA = null;
+    drag = { pan: 1, sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y, moved: false };
+    return;
+  }
+  var cn = hitCoin(p); if (cn) { hideMenu(); collect(cn); return; }
+  var a = hitA(p); if (a) { hideMenu(); e.preventDefault(); drag = { a: a, ox: p.x - a.x, oy: p.y - a.y, sx: p.x, sy: p.y, lx: p.x, moved: false }; return; }
+  drag = { pan: 1, sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y, moved: false, tap: hitO(p), plot: typeof hitGarden === 'function' ? hitGarden(p) : -1 };
+});
+cv.addEventListener('pointermove', function (e) {
+  if (ptrs[e.pointerId]) ptrs[e.pointerId] = { x: e.clientX, y: e.clientY };
+  if (pinch) { var k = Object.keys(ptrs); if (k.length >= 2) { var a1 = ptrs[k[0]], b1 = ptrs[k[1]], d = Math.hypot(a1.x - b1.x, a1.y - b1.y) || 1; setView(pinch.vw * pinch.d / d); } return; }
+  var p = pos(e);
+  if (!drag) { var b = hitO(p), cn = hitCoin(p); hoverCoin = cn; cv.style.cursor = mode === 'edit' ? (b ? 'move' : (hitA(p) ? 'pointer' : 'grab')) : (cn || hitA(p) || (b && b.k === 'barn') || (typeof hitGarden === 'function' && hitGarden(p) >= 0) ? 'pointer' : 'grab'); return; }
+  if (drag.pan) {
+    var r = cv.getBoundingClientRect(), dx = (e.clientX - drag.sx) * VW / r.width, dy = (e.clientY - drag.sy) * VH / r.height;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) { cam.x = drag.cx - dx; cam.y = drag.cy - dy; clampCam(); cv.style.cursor = 'grabbing'; }
+    return;
+  }
+  var o = own();
+  if (drag.o) { var dd = def(drag.o); drag.o.x = Math.max(o.x - 4, Math.min(o.x + o.w + 4 - dd.w, Math.round(p.x - drag.ox))); drag.o.y = Math.max(o.y - Math.round(dd.h * .6), Math.min(o.y + o.h + 2 - dd.h, Math.round(p.y - drag.oy))); return; }
+  if (!drag.moved && Math.abs(p.x - drag.sx) + Math.abs(p.y - drag.sy) > 3) drag.moved = true;
+  if (drag.moved) {
+    var m = sprite(drag.a.t, drag.a.f).meta;
+    drag.a.x = Math.max(o.x - 4, Math.min(o.x + o.w + 4 - m.W, Math.round(p.x - drag.ox)));
+    drag.a.y = Math.max(o.y - m.H / 2, Math.min(o.y + o.h - m.foot - 1, Math.round(p.y - drag.oy)));
+    if (Math.abs(p.x - drag.lx) > 1) drag.a.f = p.x < drag.lx;
+  }
+  drag.lx = p.x;
+});
+cv.addEventListener('pointerleave', function () { hoverCoin = null; });
+function up(e) {
+  delete ptrs[e.pointerId];
+  if (pinch) { if (Object.keys(ptrs).length < 2) pinch = null; drag = null; return; }
+  if (!drag) return;
+  if (drag.pan) { if (!drag.moved && mode === 'play') { if (drag.plot >= 0) { hideMenu(); openGarden(drag.plot); } else if (drag.tap && drag.tap.k === 'barn') showMenu(drag.tap); else hideMenu(); } }
+  else if (drag.a) { var a = drag.a, now = performance.now(); a.state = 'idle'; a.until = now + 2500; if (!drag.moved) { a.j = now; bubble(a); } }
+  drag = null; cv.style.cursor = 'grab';
+}
+cv.addEventListener('pointerup', up);
+cv.addEventListener('pointercancel', up);
+var bub = $('bub'), bt;
+function bubble(a) { var m = sprite(a.t, a.f).meta; bub.textContent = TYPES[a.t][2]; bub.style.left = sx(a.x + m.W / 2); bub.style.top = sy(Math.max(a.y - a.dy, cam.y + 8)); bub.style.opacity = 1; clearTimeout(bt); bt = setTimeout(function () { bub.style.opacity = 0; }, 1100); }
+
+/* ---------- 오늘의 문제 표시 ---------- */
+function hasQuiz() { return QUIZ && QUIZ.list.some(function (x) { return x.status !== 'done'; }); }
+function updateBadge() { $('qbadge').classList.toggle('hide', !hasQuiz()); }
+function placeBadge() {
+  var bg = $('qbadge'); if (bg.classList.contains('hide')) return;
+  var b = OBJ.filter(function (o) { return o.k === 'barn'; })[0]; if (!b) return;
+  var d = def(b);
+  bg.style.left = sx(b.x + d.w / 2); bg.style.top = 'calc(' + sy(b.y) + ' - 6px)';
+  bg.style.visibility = mode === 'edit' ? 'hidden' : 'visible';
+}
+$('qbadge').onclick = function () { hideMenu(); openQuizMenu(); };
+
+/* ---------- 배치 조정 ---------- */
+var editBtn = $('editBtn'), banner = $('banner'), BTXT = '물건을 끌어서 옮기고, 눌러서 판매·보관·회전해요';
+function setMode(m) {
+  var wasEdit = mode === 'edit';
+  mode = m; hideMenu(); sel = null; selA = null;
+  editBtn.classList.toggle('on', m === 'edit');
+  editBtn.innerHTML = m === 'edit' ? '<i class="ti ti-check" aria-hidden="true"></i> 배치 완료' : '<i class="ti ti-arrows-move" aria-hidden="true"></i> 배치 조정';
+  banner.textContent = BTXT; banner.style.display = m === 'edit' ? 'block' : 'none';
+  if (wasEdit && m !== 'edit') {
+    srv('api_saveLayout', layoutList()).then(function (f) { applyFarm(f); note('배치를 저장했어요'); }).catch(function () {});
+  }
+}
+var bnT;
+function note(t) { banner.textContent = t; banner.style.display = 'block'; clearTimeout(bnT); bnT = setTimeout(function () { banner.textContent = BTXT; banner.style.display = mode === 'edit' ? 'block' : 'none'; }, 2400); }
+editBtn.addEventListener('click', function () { setMode(mode === 'edit' ? 'play' : 'edit'); });
+$('aSell').addEventListener('click', function () {
+  if (!sel || sel.k === 'barn') return;
+  var id = sel.id; sel = null;
+  srv('api_sellItem', id, layoutList()).then(applyFarm).catch(function () {});
+});
+$('aStore').addEventListener('click', function () {
+  if (sel && sel.k !== 'barn') { var id = sel.id; sel = null; srv('api_storeItem', id, layoutList()).then(applyFarm).catch(function () {}); return; }
+  if (selA) { var aid = selA.id; selA = null; srv('api_storeAnimal', aid, layoutList()).then(function (f) { applyFarm(f); note('보관함에 넣었어요'); }).catch(function () {}); }
+});
+$('aRot').addEventListener('click', function () {
+  if (!sel) return; var d = def(sel); if (!d.rot) return;
+  var cx = sel.x + d.w / 2, cy = sel.y + d.h / 2, n = ITEMS[d.rot];
+  sel.k = d.rot; sel.x = Math.round(cx - n.w / 2); sel.y = Math.round(cy - n.h / 2);
+});
+
+/* ---------- 상점 ---------- */
+var SHOP_LIST = ['path', 'fence', 'flower', 'tspring', 'tsummer', 'tfall', 'twinter', 'scare', 'lantern', 'bench', 'arch', 'gazebo', 'windmill', 'fountain', 'balloon', 'statue'];
+function newPos(k) {
+  var it = ITEMS[k], o = own();
+  var cxw = Math.max(o.x + it.w / 2, Math.min(o.x + o.w - it.w / 2, cam.x + VW / 2)), cyw = Math.max(o.y + it.h / 2, Math.min(o.y + o.h - it.h / 2, cam.y + VH / 2 + 10));
+  return [Math.round(cxw - it.w / 2), Math.round(cyw - it.h / 2)];
+}
+function afterPlace(r) {
+  closeModal();
+  if (mode !== 'edit') { mode = 'edit'; editBtn.classList.add('on'); editBtn.innerHTML = '<i class="ti ti-check" aria-hidden="true"></i> 배치 완료'; banner.textContent = BTXT; banner.style.display = 'block'; }
+  applyFarm(r.farm);
+  OBJ.forEach(function (o) { if (o.id === r.id) sel = o; });
+  note('끌어서 원하는 곳에 놓고 "배치 완료"를 눌러요');
+}
+function openShop() {
+  hideMenu();
+  openModal(head('ti-building-store', '상점') + '<div class="muted"><span class="coin"></span> 내 골드 ' + fmt(state.gold) + '</div><div class="gh">기본 꾸미기</div><div class="grid" id="sg1"></div><div class="gh">특별한 장식</div><div class="grid" id="sg2"></div><div class="err" id="serr"></div>');
+  SHOP_LIST.forEach(function (k) {
+    var it = ITEMS[k], g = $(it.price >= 2000 ? 'sg2' : 'sg1'), d = document.createElement('div');
+    d.className = 'item'; d.appendChild(itemIcon(k));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(it.name) + '</div><div class="p">' + esc(it.desc) + '</div>');
+    var sel2 = null;
+    if (it.statue) {
+      var mine = {}; A.forEach(function (a) { mine[a.t] = 1; }); STORE.animals.forEach(function (a) { mine[a.t] = 1; });
+      var keys = Object.keys(mine);
+      if (!keys.length) { d.insertAdjacentHTML('beforeend', '<div class="p">동물이 생기면 만들 수 있어요</div>'); g.appendChild(d); return; }
+      sel2 = document.createElement('select'); sel2.setAttribute('aria-label', '동상으로 만들 동물');
+      keys.forEach(function (t) { var op = document.createElement('option'); op.value = t; op.textContent = nm(t); sel2.appendChild(op); });
+      sel2.onchange = function () { d.replaceChild(itemIcon(k, sel2.value), d.firstChild); };
+      d.appendChild(sel2); d.replaceChild(itemIcon(k, sel2.value), d.firstChild);
+    }
+    var b = document.createElement('button'); b.className = 'pbtn sm'; b.innerHTML = '<span class="coin"></span> ' + fmt(it.price);
+    if (state.gold < it.price) b.disabled = true;
+    b.onclick = function () {
+      if (state.gold < it.price) { $('serr').textContent = '골드가 부족해요.'; return; }
+      var p = newPos(k);
+      b.disabled = true;
+      srv('api_buyItem', k, sel2 ? sel2.value : null, p[0], p[1], layoutList()).then(afterPlace).catch(function () { b.disabled = false; });
+    };
+    d.appendChild(b); g.appendChild(d);
+  });
+}
+
+/* ---------- 도감 ---------- */
+var DEX_GROUPS = [['기초', 'b'], ['기본', 'm'], ['사고력', 't'], ['황금', 'g'], ['전설', 'l']];
+function dexHtmlInto(el, owned) {
+  DEX_GROUPS.forEach(function (g) {
+    var list = CF.ANIMALS[g[1]], p = CF.PAY[g[1] === 'g' || g[1] === 'l' ? 's' : g[1]];
+    el.insertAdjacentHTML('beforeend', '<div class="gh">' + g[0] + ' · 하루 ' + (p[0] === p[1] ? p[0] : p[0] + '~' + p[1]) + '골드</div>');
+    var gr = document.createElement('div'); gr.className = 'grid';
+    list.forEach(function (t) {
+      var has = !!owned[t], d = document.createElement('div'); d.className = 'item' + (has ? '' : ' no');
+      d.appendChild(animalIcon(t, !has));
+      d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + (has ? esc(nm(t)) : '???') + '</div><div class="p">' + (has ? owned[t] + '마리' : '아직 못 만났어요') + '</div>');
+      gr.appendChild(d);
+    });
+    el.appendChild(gr);
+  });
+}
+function ownedNow() { var s = {}; A.forEach(function (a) { s[a.t] = (s[a.t] || 0) + 1; }); STORE.animals.forEach(function (a) { s[a.t] = (s[a.t] || 0) + 1; }); return s; }
+function openDex() {
+  hideMenu();
+  var o2 = ownedNow(), total = 0, got = 0;
+  DEX_GROUPS.forEach(function (g) { CF.ANIMALS[g[1]].forEach(function (t) { total++; if (o2[t]) got++; }); });
+  openModal(head('ti-book', '동물 도감 · ' + got + ' / ' + total) + '<div id="dexBox"></div>');
+  dexHtmlInto($('dexBox'), o2);
+}
+
+/* ---------- 보관함 ---------- */
+function openStore() {
+  hideMenu();
+  openModal(head('ti-box', '보관함') + '<div class="muted">보관함의 동물은 골드를 주지 않아요. 농장 자리: ' + A.length + ' / ' + cap() + '</div><div class="gh">동물</div><div class="grid" id="sa"></div><div class="gh">물건</div><div class="grid" id="si"></div><div class="err" id="serr"></div>');
+  var sa = $('sa'), si = $('si');
+  if (!STORE.animals.length) sa.innerHTML = '<div class="muted">보관 중인 동물이 없어요</div>';
+  STORE.animals.forEach(function (an) {
+    var d = document.createElement('div'); d.className = 'item'; d.appendChild(animalIcon(an.t));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(nm(an.t)) + '</div>');
+    var b = document.createElement('button'); b.className = 'pbtn sm'; b.innerHTML = '<i class="ti ti-door-exit" aria-hidden="true"></i> 꺼내기';
+    b.onclick = function () {
+      if (A.length >= cap()) { $('serr').textContent = '농장 자리가 부족해요. 건물을 업그레이드하면 더 키울 수 있어요.'; return; }
+      b.disabled = true;
+      srv('api_takeOutAnimal', an.id).then(function (f) {
+        applyFarm(f);
+        A.forEach(function (a) { if (a.id === an.id) { var s = freeSpot(cam.x + VW / 2, cam.y + VH / 2), m = sprite(a.t, false).meta; a.x = Math.round(s[0] - m.W / 2); a.y = Math.round(s[1] - m.foot); a.j = performance.now(); } });
+        openStore();
+      }).catch(function () { b.disabled = false; });
+    };
+    d.appendChild(b); sa.appendChild(d);
+  });
+  if (!STORE.items.length) si.innerHTML = '<div class="muted">보관 중인 물건이 없어요</div>';
+  STORE.items.forEach(function (s, i) {
+    var d = document.createElement('div'); d.className = 'item'; d.appendChild(itemIcon(s.k, s.an));
+    d.insertAdjacentHTML('beforeend', '<div style="font-weight:600">' + esc(ITEMS[s.k].name) + '</div>');
+    var b = document.createElement('button'); b.className = 'pbtn sm'; b.innerHTML = '<i class="ti ti-arrows-move" aria-hidden="true"></i> 배치하기';
+    b.onclick = function () { var p = newPos(s.k); b.disabled = true; srv('api_placeItem', i, p[0], p[1]).then(afterPlace).catch(function () { b.disabled = false; }); };
+    d.appendChild(b); si.appendChild(d);
+  });
+}
+
+/* ---------- 건물 업그레이드 ---------- */
+function landCanvas(i) {
+  var l = LAND[i], mx = LAND[LAND.length - 1];
+  return off(100, 70, function () {
+    R(0, 0, 100, 70, '#5e973c');
+    var w = Math.round(l[0] / mx[0] * 92), h = Math.round(l[1] / mx[1] * 62);
+    R(50 - w / 2, 35 - h / 2, w, h, '#8fcf5a'); R(50 - w / 2, 35 - h / 2, w, 1, '#4a7a2a'); R(50 - w / 2, 35 + h / 2 - 1, w, 1, '#4a7a2a'); R(50 - w / 2, 35 - h / 2, 1, h, '#4a7a2a'); R(50 + w / 2 - 1, 35 - h / 2, 1, h, '#4a7a2a');
+  });
+}
+function openUpgrade() {
+  hideMenu();
+  var cur = BARN[state.barn], nx = BARN[state.barn + 1];
+  openModal(head('ti-hammer', '건물 업그레이드') + '<div class="upg" id="upRow"></div><div style="text-align:center" id="upBox"></div>');
+  function card(b, i, lab) {
+    var d = document.createElement('div'); d.className = 'item'; d.appendChild(scaled(b.c, b.w, b.h, 130, 90));
+    var lc = landCanvas(i); lc.style.width = '100px'; lc.style.height = '70px'; lc.style.marginTop = '6px';
+    d.insertAdjacentHTML('beforeend', '<div class="muted">' + lab + '</div><div style="font-weight:600">' + esc(b.name) + '</div><div class="p"><i class="ti ti-paw" aria-hidden="true"></i> 최대 ' + b.cap + '마리</div>');
+    d.appendChild(lc);
+    d.insertAdjacentHTML('beforeend', '<div class="p">내 땅 크기</div>');
+    return d;
+  }
+  var row = $('upRow');
+  row.appendChild(card(cur, state.barn, '지금'));
+  if (nx) { row.insertAdjacentHTML('beforeend', '<span style="font-size:22px;color:#6b4423"><i class="ti ti-arrow-right" aria-hidden="true"></i></span>'); row.appendChild(card(nx, state.barn + 1, '다음 단계')); }
+  var box = $('upBox');
+  if (!nx) { box.innerHTML = '<div class="ok">가장 큰 농장까지 다 지었어요!</div>'; return; }
+  var b = document.createElement('button'); b.className = 'pbtn g'; b.innerHTML = '<i class="ti ti-hammer" aria-hidden="true"></i> 업그레이드 <span class="coin"></span> ' + fmt(nx.cost);
+  var er = document.createElement('div'); er.className = 'err';
+  b.onclick = function () {
+    if (state.gold < nx.cost) { er.textContent = '골드가 ' + fmt(nx.cost - state.gold) + ' 부족해요.'; return; }
+    b.disabled = true;
+    srv('api_upgradeBarn').then(function (f) {
+      applyFarm(f); closeModal(); flash = performance.now() + 1200;
+      var bo = OBJ.filter(function (o) { return o.k === 'barn'; })[0], d = def(bo);
+      centerOn(bo.x + d.w / 2, bo.y + d.h / 2 + 30);
+      note(nx.name + ' 완성! 땅이 넓어졌어요');
+    }).catch(function () { b.disabled = false; });
+  };
+  box.appendChild(b); box.appendChild(er);
+}
+
+/* ---------- 농장 이름 ---------- */
+function openRename() {
+  hideMenu();
+  openModal(head('ti-pencil', '농장 이름 바꾸기') + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px"><input id="nmIn" maxlength="12" aria-label="농장 이름"><button class="pbtn" id="nmOk">저장</button></div><div class="muted" style="margin-top:6px">12글자까지 쓸 수 있어요</div><div class="err" id="nmErr"></div>');
+  var inp = $('nmIn'); inp.value = state.name; inp.focus();
+  function save() {
+    var v = inp.value.trim();
+    if (!v) { $('nmErr').textContent = '농장 이름을 입력해 주세요.'; return; }
+    srv('api_rename', v).then(function (f) { applyFarm(f); closeModal(); }).catch(function (e) { $('nmErr').textContent = e.message; });
+  }
+  $('nmOk').onclick = save;
+  inp.onkeydown = function (e) { if (e.key === 'Enter') save(); };
+}
+
+$('mQuiz').onclick = function () { hideMenu(); openQuizMenu(); };
+$('mShop').onclick = openShop;
+$('mDex').onclick = openDex;
+$('mStore').onclick = openStore;
+$('mUp').onclick = openUpgrade;
+$('hud').onclick = openRename;
+$('teacherBtn').onclick = function () { openTeacher(); };
+</script>

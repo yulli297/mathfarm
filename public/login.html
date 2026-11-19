@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>수학 농장 · 로그인</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: Pretendard, system-ui, sans-serif; color: #3b2a1a;
+    background: #5e973c;
+    background-image: radial-gradient(#689f45 2px, transparent 2px), radial-gradient(#4f8532 1.5px, transparent 1.5px);
+    background-size: 26px 26px, 19px 19px; background-position: 0 0, 9px 13px;
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: #fbf1dc; border: 4px solid #8b5a2b; border-radius: 12px;
+    box-shadow: 0 6px 0 #5a3a22, 0 10px 30px rgba(0,0,0,.25); padding: 22px 22px 18px;
+  }
+  h1 { margin: 0 0 4px; font-size: 24px; text-align: center; }
+  .sub { text-align: center; color: #7a5a3a; font-size: 14px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button {
+    flex: 1; padding: 8px; font: inherit; font-weight: 600; border: 2px solid #c9a46a; border-radius: 8px;
+    background: #fff8e8; color: #7a5a3a; cursor: pointer;
+  }
+  .tabs button.on { background: #8b5a2b; border-color: #8b5a2b; color: #fff; }
+  label { display: block; font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+  input {
+    width: 100%; font: inherit; font-size: 20px; padding: 10px 12px; border: 2px solid #c9a46a; border-radius: 8px; background: #fff;
+  }
+  input:focus { outline: 3px solid #f5c518; border-color: #8b5a2b; }
+  .go {
+    width: 100%; margin-top: 16px; padding: 12px; font: inherit; font-size: 18px; font-weight: 700; color: #fff;
+    background: #5fa83a; border: none; border-radius: 9px; box-shadow: 0 4px 0 #3f7a24; cursor: pointer;
+  }
+  .go:active { transform: translateY(2px); box-shadow: 0 2px 0 #3f7a24; }
+  .go[disabled] { opacity: .6; }
+  .err { color: #c0392b; font-size: 14px; min-height: 20px; margin-top: 10px; text-align: center; }
+  .hide { display: none; }
+  .tip { font-size: 12px; color: #8a7a62; text-align: center; margin-top: 6px; }
+</style>
+</head>
+<body>
+<form class="card" id="f" autocomplete="off">
+  <h1>🐔 수학 농장</h1>
+  <div class="sub">번호와 비밀번호로 들어가요</div>
+  <div class="tabs">
+    <button type="button" class="on" id="tS">학생</button>
+    <button type="button" id="tT">선생님</button>
+  </div>
+  <div id="sBox">
+    <label for="no">번호</label>
+    <input id="no" inputmode="numeric" pattern="[0-9]*" maxlength="3" placeholder="예: 7">
+  </div>
+  <label for="pw">비밀번호</label>
+  <input id="pw" type="password" placeholder="선생님이 알려 준 비밀번호">
+  <button class="go" id="go" type="submit">들어가기</button>
+  <div class="err" id="err"></div>
+  <div class="tip">한 번 들어가면 이 기기에서는 다음부터 바로 열려요</div>
+</form>
+<script>
+  var role = 'student', $ = function (id) { return document.getElementById(id); };
+  var admin = /admin=1/.test(location.search);
+  function setRole(r) {
+    role = r;
+    $('tS').classList.toggle('on', r === 'student');
+    $('tT').classList.toggle('on', r === 'teacher');
+    $('sBox').classList.toggle('hide', r === 'teacher');
+    $('pw').placeholder = r === 'teacher' ? '선생님 비밀번호' : '선생님이 알려 준 비밀번호';
+    (r === 'teacher' ? $('pw') : $('no')).focus();
+  }
+  $('tS').onclick = function () { setRole('student'); };
+  $('tT').onclick = function () { setRole('teacher'); };
+  if (admin) setRole('teacher'); else $('no').focus();
+  $('f').onsubmit = function (e) {
+    e.preventDefault();
+    $('err').textContent = '';
+    if (role === 'student' && !$('no').value.trim()) { $('err').textContent = '번호를 적어 주세요.'; return; }
+    if (!$('pw').value.trim()) { $('err').textContent = '비밀번호를 적어 주세요.'; return; }
+    $('go').disabled = true; $('go').textContent = '들어가는 중…';
+    fetch('/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ role: role, no: $('no').value, pw: $('pw').value })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j.ok) { location.href = admin ? '/admin' : '/'; return; }
+      $('err').textContent = j.e; $('go').disabled = false; $('go').textContent = '들어가기';
+    }).catch(function () {
+      $('err').textContent = '서버에 연결할 수 없어요. 잠시 뒤에 다시 해 보세요.';
+      $('go').disabled = false; $('go').textContent = '들어가기';
+    });
+  };
+</script>
+</body>
+</html>
