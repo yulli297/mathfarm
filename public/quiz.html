@@ -7,6 +7,12 @@ function openQuizMenu() {
   $('qbox').innerHTML = '<div class="muted" style="padding:30px;text-align:center">불러오는 중…</div>';
   srv('api_quizMenu').then(function (m) { QUIZ = m; updateBadge(); renderMenu(); }).catch(function () { closeQuiz(); });
 }
+/** 선생님이 풀던 차시를 초기화했으면 문제 목록으로 돌아가요 */
+function qLost(e) {
+  var m = String(e && e.message || '');
+  if (m.indexOf('풀고 있는 차시가 없어요') >= 0 || m.indexOf('고를 동물이 없어요') >= 0) { qBusy = false; openQuizMenu(); return true; }
+  return false;
+}
 function closeQuiz() { $('quiz').classList.remove('show'); QV = null; }
 
 function renderMenu() {
@@ -97,7 +103,7 @@ function submitQ() {
       $('qfb').textContent = '다시 생각해 봐요. 남은 기회 ' + r.left + '번';
       if ($('qin')) { $('qin').value = ''; }
     }
-  }).catch(function () { qBusy = false; if ($('qsub')) $('qsub').disabled = false; });
+  }).catch(function (e) { qBusy = false; if (qLost(e)) return; if ($('qsub')) $('qsub').disabled = false; });
 }
 
 function afterSubmit(r) {
@@ -113,7 +119,7 @@ function renderChoose() {
     '<div class="wood opt" id="cBasic"><h4><i class="ti ti-leaf" aria-hidden="true"></i> 기본 문제</h4><p>지금까지 배운 내용을 한 번 더 연습해요.<br>3문제 중 <b>' + CF.ZONE_NEED + '문제를 맞히면</b> 기본 동물 1마리를 만나요.</p></div>' +
     '<div class="wood opt" id="cAdv"><h4><i class="ti ti-flame" aria-hidden="true"></i> 사고력 문제</h4><p>조금 더 생각해야 하는 문제예요.<br><b>맞힐 때마다</b> 동물 1마리! 황금 동물이나 전설의 동물이 나타날 수도 있어요. 틀린 문제는 동물이 없어요.</p></div>' +
     '</div></div>';
-  function go(c) { srv('api_chooseLevel', c).then(function (r) { QV = r.view; renderQ(); }).catch(function () {}); }
+  function go(c) { srv('api_chooseLevel', c).then(function (r) { if (!r.view) { openQuizMenu(); return; } QV = r.view; renderQ(); }).catch(function (e) { qLost(e); }); }
   $('cBasic').onclick = function () { go('basic'); };
   $('cAdv').onclick = function () { go('adv'); };
 }
@@ -137,7 +143,7 @@ function renderOffer() {
         toast(nm(t) + iga(nm(t)) + (r.where === 'farm' ? ' 농장에 왔어요!' : ' 보관함으로 갔어요 (농장이 꽉 찼어요)'));
         if (r.result) { showResult(r.result); return; }
         QV = r.view; renderQ();
-      }).catch(function () { qBusy = false; });
+      }).catch(function (e) { qBusy = false; qLost(e); });
     };
     $('cands').appendChild(d);
   });

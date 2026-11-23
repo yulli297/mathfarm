@@ -73,7 +73,7 @@ function tStudentsTab() {
     return '<tr><td>' + esc(s.no) + '</td><td class="l">' + esc(s.name) + '</td><td class="l">' + esc(s.farmName) + '</td><td>Lv.' + s.level + '</td><td>' + doneN + '</td>' +
       '<td><span class="coin"></span> ' + fmt(s.gold) + ' <button class="pbtn sm w" data-gold="' + i + '">수정</button></td>' +
       '<td>' + s.onFarm + ' / ' + s.inStore + '</td><td>' + kinds + ' / ' + allKinds() + ' <button class="pbtn sm w" data-dex="' + i + '">보기</button></td>' +
-      '<td>' + firstRate(s.email) + '</td><td>' + (s.doing ? esc(titleOf(s.doing)) : '') + '</td><td>' + s.pity + '</td>' +
+      '<td>' + firstRate(s.email) + '</td><td>' + (s.doing ? esc(titleOf(s.doing)) + (s.doingInfo ? ' <span class="muted">(' + Math.min(s.doingInfo.idx + 1, 10) + '번)</span>' : '') + ' <button class="pbtn sm red" data-rc="' + i + '"><i class="ti ti-refresh" aria-hidden="true"></i> 초기화</button>' : '') + '</td><td>' + s.pity + '</td>' +
       '<td><button class="pbtn sm w" data-re="' + i + '">차시 열기' + (s.reopened.length ? ' (' + s.reopened.length + ')' : '') + '</button></td></tr>';
   }).join('');
   $('tbody').innerHTML = '<div class="legend">정답률은 한 번에 맞힌 비율이에요. 동물 수는 농장 / 보관함. 전설 카운트는 사고력 뽑기 횟수(' + TD.pity + '번째에 전설 확정, 전설을 받으면 0부터)예요.</div>' +
@@ -81,6 +81,26 @@ function tStudentsTab() {
   [].forEach.call($('tbody').querySelectorAll('[data-gold]'), function (b) { b.onclick = function () { goldModal(TD.students[+b.getAttribute('data-gold')]); }; });
   [].forEach.call($('tbody').querySelectorAll('[data-dex]'), function (b) { b.onclick = function () { var s = TD.students[+b.getAttribute('data-dex')]; openModal(head('ti-book', esc(s.name) + ' 도감') + '<div id="dexBox"></div>'); dexHtmlInto($('dexBox'), s.dex); }; });
   [].forEach.call($('tbody').querySelectorAll('[data-re]'), function (b) { b.onclick = function () { reopenModal(TD.students[+b.getAttribute('data-re')]); }; });
+  [].forEach.call($('tbody').querySelectorAll('[data-rc]'), function (b) { b.onclick = function () { resetCurModal(TD.students[+b.getAttribute('data-rc')]); }; });
+}
+/* 풀고 있는 차시 초기화: 처음(1번)부터 다시 풀게 해요 */
+function resetCurModal(s) {
+  var inf = s.doingInfo || { idx: 0, got: 0, capUp: 0 };
+  openModal(head('ti-refresh', esc(s.name) + ' · 풀고 있는 차시 초기화') +
+    '<div style="font-size:16px;margin-bottom:6px"><b>' + esc(titleOf(s.doing)) + '</b> · 지금 ' + Math.min(inf.idx + 1, 10) + '번 문제를 풀고 있어요.</div>' +
+    '<div class="muted" style="margin-bottom:10px;line-height:1.6">초기화하면 이 차시를 <b>1번부터 다시</b> 풀어요.<br>' +
+    '이번에 풀면서 받은 동물 ' + inf.got + '마리' + (inf.capUp ? ', 최대 마릿수 보너스 +' + inf.capUp : '') + ', 전설 카운트도 시작 전으로 돌아가요.<br>' +
+    '학생 화면은 다음 버튼을 누를 때 문제 목록으로 돌아가요.</div>' +
+    '<div style="display:flex;gap:6px;justify-content:flex-end"><button class="pbtn w" id="rcNo">취소</button><button class="pbtn red" id="rcOk"><i class="ti ti-refresh" aria-hidden="true"></i> 초기화하기</button></div><div class="err" id="rcErr"></div>');
+  $('rcNo').onclick = closeModal;
+  $('rcOk').onclick = function () {
+    $('rcOk').disabled = true;
+    srv('api_resetCurrent', s.email, s.doing).then(function (r) {
+      TD = r; closeModal();
+      toast(s.name + ' 학생의 차시를 초기화했어요' + (r.resetCur && r.resetCur.removed ? ' (동물 ' + r.resetCur.removed + '마리 회수)' : ''));
+      renderTeacher();
+    }).catch(function (e) { $('rcOk').disabled = false; $('rcErr').textContent = e.message; });
+  };
 }
 function allKinds() { var n = 0; Object.keys(CF.ANIMALS).forEach(function (k) { n += CF.ANIMALS[k].length; }); return n; }
 function titleOf(id) { var L = TD.lessons.filter(function (l) { return l.id === id; })[0]; return L ? L.title : id; }

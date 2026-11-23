@@ -621,7 +621,8 @@ module.exports = function createGame(S, store) {
     F.cur = {
       lesson: id, idx: 0, tries: 0, choice: null,
       res: [null, null, null, null, null, null, null, null, null, null],
-      offers: [], got: [], log: [],
+      offers: [], got: [], gotIds: [], log: [],
+      pity0: F.pity | 0,
       xp: id === open && !F.done[id],
       at: Date.now()
     };
@@ -679,6 +680,8 @@ module.exports = function createGame(S, store) {
     if (CFG.ANIMALS.l.indexOf(t) >= 0) F.pity = 0;
     const where = addAnimal_(F, t);
     cur.got.push(t);
+    const added = where === 'farm' ? F.animals[F.animals.length - 1] : F.storage.animals[F.storage.animals.length - 1];
+    (cur.gotIds = cur.gotIds || []).push(added.id);
     const out = { where: where, t: t };
     if (cur.idx >= 10 && !cur.offers.length) {
       out.result = finishQuiz_(F);
@@ -780,7 +783,8 @@ module.exports = function createGame(S, store) {
         no: s.no, name: s.name, email: s.email, joined: true,
         farmName: F.name, level: lv.level, lessons: F.lessons, gold: F.gold, barn: F.barn,
         onFarm: F.animals.length, inStore: F.storage.animals.length, dex: ownedSet_(F),
-        done: F.done, reopened: F.reopened, doing: F.cur ? F.cur.lesson : '', pity: F.pity
+        done: F.done, reopened: F.reopened, doing: F.cur ? F.cur.lesson : '', pity: F.pity,
+        doingInfo: F.cur ? { idx: F.cur.idx, got: (F.cur.got || []).length, capUp: F.cur.capUp | 0 } : null
       };
     });
 
@@ -837,6 +841,47 @@ module.exports = function createGame(S, store) {
       if (on) F.reopened.push(id);
     });
     return api_teacherData(me);
+  }
+
+  /** 학생이 풀고 있는 차시를 처음부터 다시 풀게 초기화.
+   *  이번에 풀면서 받은 동물·최대 마릿수 보너스·전설 카운트도 차시 시작 전으로 되돌려요.
+   *  (풀이 기록은 차시를 끝낼 때만 저장되므로 따로 지울 것이 없어요) */
+  function api_resetCurrent(me, key, lessonId) {
+    teacherOnly_(me);
+    let info = null;
+    editStudentFarm_(String(key), F => {
+      const cur = F.cur;
+      if (!cur) fail('이 학생은 지금 풀고 있는 차시가 없어요.');
+      if (lessonId && cur.lesson !== lessonId) fail('그 사이에 학생이 다른 차시를 풀고 있어요. 화면을 새로 불러와 주세요.');
+      let removed = 0;
+      const ids = cur.gotIds || [];
+      if (ids.length) {
+        ids.forEach(id => {
+          let i = findIdx_(F.animals, id);
+          if (i >= 0) { F.animals.splice(i, 1); removed++; return; }
+          i = findIdx_(F.storage.animals, id);
+          if (i >= 0) { F.storage.animals.splice(i, 1); removed++; }
+        });
+      } else {
+        // 예전 방식으로 시작한 차시: 받은 동물 종류로 가장 최근 것부터 지워요
+        (cur.got || []).forEach(t => {
+          const take = list => { for (let i = list.length - 1; i >= 0; i--) if (list[i].t === t) { list.splice(i, 1); return true; } return false; };
+          if (take(F.storage.animals) || take(F.animals)) removed++;
+        });
+      }
+      if (cur.capUp) {
+        F.capBonus = Math.max(0, (F.capBonus | 0) - (cur.capUp | 0));
+        if (F.bonusLessons) delete F.bonusLessons[cur.lesson];
+      }
+      if (typeof cur.pity0 === 'number') F.pity = cur.pity0;
+      // 보너스가 줄어 농장이 넘치면 넘친 동물은 보관함으로
+      while (F.animals.length > cap_(F)) F.storage.animals.push(F.animals.pop());
+      info = { lesson: cur.lesson, removed: removed };
+      F.cur = null;
+    });
+    const d = api_teacherData(me);
+    d.resetCur = info;
+    return d;
   }
 
   function api_setGold(me, key, gold) {
@@ -911,7 +956,7 @@ module.exports = function createGame(S, store) {
     api_storeAnimal, api_takeOutAnimal, api_upgradeBarn, api_rename, api_finishIntro,
     api_plant, api_harvest, api_eventAnswer, api_heal, api_feed,
     api_quizMenu, api_startQuiz, api_chooseLevel, api_submit, api_pickAnimal,
-    api_teacherData, api_setOpenLesson, api_reopen, api_setGold, api_teacherTool, api_resetFarms
+    api_teacherData, api_setOpenLesson, api_reopen, api_resetCurrent, api_setGold, api_teacherTool, api_resetFarms
   };
 
   return { API, UserError, setQuestions, buildBoot_, checkQuestionBank_, keyOf, importFarm_, fixFarm_, getQuestions: () => QBANK };
