@@ -557,7 +557,7 @@ module.exports = function createGame(S, store) {
     const open = getSetting_('열린차시'), Lm = lessonMap_(), list = [];
     if (open && Lm[open]) {
       list.push({ id: open, title: Lm[open].title, unit: Lm[open].unit || '', kind: 'today',
-        status: F.cur && F.cur.lesson === open ? 'doing' : (F.done[open] && F.reopened.indexOf(open) < 0 ? 'done' : 'ready') });
+        status: F.cur && F.cur.lesson === open ? 'doing' : (F.done[open] && F.reopened.indexOf(open) < 0 ? 'review' : 'ready') });
     }
     F.reopened.forEach(id => {
       if (id === open || !Lm[id]) return;
@@ -565,8 +565,13 @@ module.exports = function createGame(S, store) {
         status: F.cur && F.cur.lesson === id ? 'doing' : 'ready' });
     });
     if (F.cur && Lm[F.cur.lesson] && !list.some(x => x.id === F.cur.lesson)) {
-      list.unshift({ id: F.cur.lesson, title: Lm[F.cur.lesson].title, unit: Lm[F.cur.lesson].unit || '', kind: 'doing', status: 'doing' });
+      list.unshift({ id: F.cur.lesson, title: Lm[F.cur.lesson].title, unit: Lm[F.cur.lesson].unit || '', kind: F.cur.review ? 'review' : 'doing', status: 'doing' });
     }
+    // 다 푼 지난 차시는 복습용으로 언제든 다시 풀 수 있어요 (보상·기록 없음)
+    QBANK.forEach(L => {
+      if (!F.done[L.id] || list.some(x => x.id === L.id)) return;
+      list.push({ id: L.id, title: L.title, unit: L.unit || '', kind: 'review', status: 'review', best: F.done[L.id].correct });
+    });
     return { list: list, last: F.lastResult || null };
   }
 
@@ -576,7 +581,7 @@ module.exports = function createGame(S, store) {
     const L = lessonMap_()[cur.lesson];
     if (!L) return null;
     const v = {
-      lesson: cur.lesson, title: L.title, unit: L.unit || '', idx: cur.idx, choice: cur.choice,
+      lesson: cur.lesson, title: L.title, unit: L.unit || '', idx: cur.idx, choice: cur.choice, review: !!cur.review,
       res: cur.res.map(r => r ? (r.ok ? 1 : 0) : null)
     };
     if (cur.offers.length) {
@@ -616,9 +621,11 @@ module.exports = function createGame(S, store) {
     }
     const open = getSetting_('열린차시');
     const reopened = F.reopened.indexOf(id) >= 0;
-    const ok = reopened || (id === open && !F.done[id]);
-    if (!ok) fail(F.done[id] ? '이미 푼 차시예요.' : '아직 열리지 않은 차시예요.');
+    const fresh = reopened || (id === open && !F.done[id]);
+    const review = !fresh && !!F.done[id];
+    if (!fresh && !review) fail('아직 열리지 않은 차시예요.');
     F.cur = {
+      review: review,
       lesson: id, idx: 0, tries: 0, choice: null,
       res: [null, null, null, null, null, null, null, null, null, null],
       offers: [], got: [], gotIds: [], log: [],
@@ -694,6 +701,7 @@ module.exports = function createGame(S, store) {
   }
 
   function rewardAfter_(F, cur) {
+    if (cur.review) return;   // 복습은 동물·보너스 없음
     const i = cur.idx, r = cur.res;
     function okCount(a, b) { let n = 0; for (let k = a; k <= b; k++) if (r[k] && r[k].ok) n++; return n; }
     if (i === 9 && cur.choice === 'adv' && r[7] && r[7].first && r[8] && r[8].first && r[9] && r[9].first) grantCapBonus_(F, cur);
@@ -742,6 +750,12 @@ module.exports = function createGame(S, store) {
     const cur = F.cur, L = lessonMap_()[cur.lesson];
     let correct = 0, first = 0;
     cur.res.forEach(r => { if (r && r.ok) correct++; if (r && r.first) first++; });
+    if (cur.review) {
+      // 복습: 경험치·골드·동물·텃밭·정답률 기록에 영향 없이 결과만 보여 줘요
+      F.cur = null;
+      return { lesson: cur.lesson, title: L.title, correct: correct, first: first, got: [], review: true,
+        best: F.done[cur.lesson] ? F.done[cur.lesson].correct : 0 };
+    }
     const before = levelInfo_(F.lessons).level;
     if (cur.xp) F.lessons++;
     const after = levelInfo_(F.lessons);

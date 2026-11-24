@@ -325,7 +325,7 @@ var bub = $('bub'), bt;
 function bubble(a) { var m = sprite(a.t, a.f).meta; bub.textContent = TYPES[a.t][2]; bub.style.left = sx(a.x + m.W / 2); bub.style.top = sy(Math.max(a.y - a.dy, cam.y + 8)); bub.style.opacity = 1; clearTimeout(bt); bt = setTimeout(function () { bub.style.opacity = 0; }, 1100); }
 
 /* ---------- 오늘의 문제 표시 ---------- */
-function hasQuiz() { return QUIZ && QUIZ.list.some(function (x) { return x.status !== 'done'; }); }
+function hasQuiz() { return QUIZ && QUIZ.list.some(function (x) { return x.status !== 'done' && x.status !== 'review' && x.kind !== 'review'; }); }
 function updateBadge() { $('qbadge').classList.toggle('hide', !hasQuiz()); }
 function placeBadge() {
   var bg = $('qbadge'); if (bg.classList.contains('hide')) return;

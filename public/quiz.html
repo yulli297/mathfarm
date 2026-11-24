@@ -17,13 +17,20 @@ function closeQuiz() { $('quiz').classList.remove('show'); QV = null; }
 
 function renderMenu() {
   var list = QUIZ.list, html = '<div class="qhead"><div class="t"><i class="ti ti-pencil" aria-hidden="true"></i> 문제 풀기</div><button class="pbtn w" onclick="closeQuiz()"><i class="ti ti-arrow-left" aria-hidden="true"></i> 농장으로</button></div><div class="qmenu">';
-  if (!list.length) html += '<div class="card wood">지금은 열린 차시가 없어요. 선생님이 차시를 열면 풀 수 있어요.</div>';
-  list.forEach(function (x) {
-    var tag = x.kind === 'today' ? '오늘의 문제' : (x.kind === 'reopen' ? '선생님이 다시 열어 준 차시' : '풀던 차시');
+  if (!list.some(function (x) { return x.kind !== 'review'; })) html += '<div class="card wood">지금은 열린 차시가 없어요. 선생님이 차시를 열면 풀 수 있어요.</div>';
+  var main = list.filter(function (x) { return x.kind !== 'review'; }), rev = list.filter(function (x) { return x.kind === 'review'; });
+  function card(x) {
+    var tag = x.kind === 'today' ? '오늘의 문제' + (x.status === 'review' ? ' · 다 풀었어요' : '') : (x.kind === 'reopen' ? '선생님이 다시 열어 준 차시' : x.kind === 'review' ? '복습' + (x.best !== undefined ? ' · 처음 점수 ' + x.best + '/10' : '') : '풀던 차시');
     var btn = x.status === 'done' ? '<span class="tag">다 풀었어요</span>' :
+      x.status === 'review' ? '<button class="pbtn w" data-id="' + esc(x.id) + '"><i class="ti ti-repeat" aria-hidden="true"></i> 복습하기</button>' :
       '<button class="pbtn g" data-id="' + esc(x.id) + '"><i class="ti ti-player-play" aria-hidden="true"></i> ' + (x.status === 'doing' ? '이어서 풀기' : '시작하기') + '</button>';
-    html += '<div class="card wood"><div><div class="muted">' + tag + (x.unit ? ' · ' + esc(x.unit) : '') + '</div><div style="font-size:17px;font-weight:600">' + esc(x.title) + '</div></div>' + btn + '</div>';
-  });
+    return '<div class="card wood"><div><div class="muted">' + tag + (x.unit ? ' · ' + esc(x.unit) : '') + '</div><div style="font-size:17px;font-weight:600">' + esc(x.title) + '</div></div>' + btn + '</div>';
+  }
+  main.forEach(function (x) { html += card(x); });
+  if (rev.length) {
+    html += '<div class="card wood muted" style="display:block"><i class="ti ti-repeat" aria-hidden="true"></i> <b>복습하기</b> · 다 푼 차시를 몇 번이든 다시 풀 수 있어요. 복습은 동물·골드·경험치를 주지 않아요.</div>';
+    rev.forEach(function (x) { html += card(x); });
+  }
   html += '<div class="card wood muted" style="display:block">10문제 · 1~4번 기초 · 5~7번 기본 · 8~10번은 기본과 사고력 중에 골라요. 틀리면 힌트를 보고 ' + CF.MAX_TRY + '번까지 도전할 수 있어요.</div></div>';
   $('qbox').innerHTML = html;
   [].forEach.call($('qbox').querySelectorAll('button[data-id]'), function (b) {
@@ -44,6 +51,7 @@ function progHtml(v) {
     h += '<span class="d ' + cls + '">' + (r === 1 ? '<i class="ti ti-check"></i>' : r === 0 ? '<i class="ti ti-x"></i>' : (i + 1)) + '</span>';
   }
   var n = CF.ZONE_NEED;
+  if (v.review) return h + '</div><div class="zones"><span><i class="ti ti-repeat" aria-hidden="true"></i> 복습 중이에요 · 동물과 보상 없이 연습만 해요</span></div>';
   h += '</div><div class="zones"><span>1~4번 중 ' + n + '문제 맞히면 기초 동물</span><span>5~7번 중 ' + n + '문제 맞히면 기본 동물</span><span>' +
     (v.choice === 'adv' ? '8~10번 사고력: 맞힐 때마다 동물' : v.choice === 'basic' ? '8~10번 기본: ' + n + '문제 맞히면 기본 동물' : '8~10번: 기본 또는 사고력') + '</span></div>';
   return h;
@@ -116,8 +124,8 @@ function afterSubmit(r) {
 function renderChoose() {
   $('qbox').innerHTML = qHead(QV) + '<div class="wood qcard"><div style="font-size:20px;font-weight:700;margin-bottom:4px">8~10번 문제를 골라요</div>' +
     '<div class="muted">한 번 고르면 8~10번을 같은 종류로 풀어요.</div><div class="choose">' +
-    '<div class="wood opt" id="cBasic"><h4><i class="ti ti-leaf" aria-hidden="true"></i> 기본 문제</h4><p>지금까지 배운 내용을 한 번 더 연습해요.<br>3문제 중 <b>' + CF.ZONE_NEED + '문제를 맞히면</b> 기본 동물 1마리를 만나요.</p></div>' +
-    '<div class="wood opt" id="cAdv"><h4><i class="ti ti-flame" aria-hidden="true"></i> 사고력 문제</h4><p>조금 더 생각해야 하는 문제예요.<br><b>맞힐 때마다</b> 동물 1마리! 황금 동물이나 전설의 동물이 나타날 수도 있어요. 틀린 문제는 동물이 없어요.</p></div>' +
+    '<div class="wood opt" id="cBasic"><h4><i class="ti ti-leaf" aria-hidden="true"></i> 기본 문제</h4><p>지금까지 배운 내용을 한 번 더 연습해요.' + (QV.review ? '' : '<br>3문제 중 <b>' + CF.ZONE_NEED + '문제를 맞히면</b> 기본 동물 1마리를 만나요.') + '</p></div>' +
+    '<div class="wood opt" id="cAdv"><h4><i class="ti ti-flame" aria-hidden="true"></i> 사고력 문제</h4><p>조금 더 생각해야 하는 문제예요.' + (QV.review ? '' : '<br><b>맞힐 때마다</b> 동물 1마리! 황금 동물이나 전설의 동물이 나타날 수도 있어요. 틀린 문제는 동물이 없어요.') + '</p></div>' +
     '</div></div>';
   function go(c) { srv('api_chooseLevel', c).then(function (r) { if (!r.view) { openQuizMenu(); return; } QV = r.view; renderQ(); }).catch(function (e) { qLost(e); }); }
   $('cBasic').onclick = function () { go('basic'); };
@@ -154,7 +162,8 @@ function showResult(res) {
   var html = '<div class="qhead"><div class="t">' + esc(res.title) + '</div><span></span></div><div class="wood qcard done">' +
     '<div style="font-size:40px;color:#e0a800"><i class="ti ti-trophy" aria-hidden="true"></i></div>' +
     '<div class="big">10문제 완료!</div><div style="font-size:16px">맞힌 문제 <b>' + res.correct + '</b>개 · 한 번에 맞힌 문제 <b>' + res.first + '</b>개</div>';
-  if (res.got.length) html += '<div class="gh">오늘 만난 동물</div><div class="got" id="gotBox"></div>';
+  if (res.review) html += '<div class="muted" style="margin-top:10px">복습 완료! 처음 풀었을 때는 ' + res.best + '개를 맞혔어요.' + (res.correct > res.best ? ' 실력이 늘었어요!' : '') + '</div>';
+  else if (res.got.length) html += '<div class="gh">오늘 만난 동물</div><div class="got" id="gotBox"></div>';
   else html += '<div class="muted" style="margin-top:10px">이번에는 동물을 만나지 못했어요. 다음 시간에 다시 도전해요!</div>';
   if (res.xp) html += '<div style="margin-top:8px">농장 경험치 +1차시</div>';
   if (res.levelUp) html += '<div class="lvup"><i class="ti ti-arrow-big-up-lines" aria-hidden="true"></i> 농장 레벨 ' + res.levelUp + ' 달성!</div>';
